@@ -1,4 +1,4 @@
-import { Image, StyleSheet, Platform } from 'react-native';
+import { Image, StyleSheet, TextInput, Text, View, Platform } from 'react-native';
 
 import { HelloWave } from '@/components/HelloWave';
 import ParallaxScrollView from '@/components/ParallaxScrollView';
@@ -15,8 +15,17 @@ export default function HomeScreen() {
           style={styles.reactLogo}
         />
       }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
+        <ThemedView style={styles.titleContainer}>
+        <View>
+          <ThemedText>Nom :</ThemedText>
+          <TextInput style={styles.txtInput} placeholder='Courses'/>
+        </View>
+
+        <View>
+          <ThemedText>Prix :</ThemedText>
+          <TextInput style={styles.txtInput} placeholder='0.00' keyboardType='number-pad'/>
+        </View>
+        {/* <ThemedText type="title">Welcome!</ThemedText>
         <HelloWave />
       </ThemedView>
       <ThemedView style={styles.stepContainer}>
@@ -48,7 +57,7 @@ export default function HomeScreen() {
           <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
           <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
           <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
+        </ThemedText> */}
       </ThemedView>
     </ParallaxScrollView>
   );
@@ -56,8 +65,8 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'column',
+    alignItems: 'stretch',
     gap: 8,
   },
   stepContainer: {
@@ -71,4 +80,14 @@ const styles = StyleSheet.create({
     left: 0,
     position: 'absolute',
   },
+  txtInput: {
+    borderColor: "black",
+    borderWidth: 1
+  },
+  container: {
+    flex: 1,
+    flexDirection: "column",
+    justifyContent: "center",
+    alignItems: "flex-start"
+  }
 });
