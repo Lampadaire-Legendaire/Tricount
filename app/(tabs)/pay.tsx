@@ -1,56 +1,69 @@
-import { StyleSheet, Image, Platform } from 'react-native';
+import React, { useState } from "react";
+import { View, Text, StyleSheet, Switch } from "react-native";
+import RNPickerSelect from "react-native-picker-select";
 
-import { Collapsible } from '@/components/Collapsible';
-import { ExternalLink } from '@/components/ExternalLink';
-import ParallaxScrollView from '@/components/ParallaxScrollView';
-import { ThemedText } from '@/components/ThemedText';
-import { ThemedView } from '@/components/ThemedView';
-import { IconSymbol } from '@/components/ui/IconSymbol';
+const App: React.FC = () => {
+  const [isEnabled, setIsEnabled] = useState(false);
 
-export default function PayRequest() {
-    return(
-      <ParallaxScrollView
-        headerBackgroundColor={{ light: '#D0D0D0', dark: '#353636' }}
-        headerImage={
-          <IconSymbol
-            size={310}
-            color="#808080"
-            name="chevron.left.forwardslash.chevron.right"
-            style={styles.headerImage}
-          />
-        }
-      >
-        <ThemedView style={styles.titleContainer}>
-          <ThemedText type="title">Explore</ThemedText>
-        </ThemedView>
-        <ThemedText>This app includes example code to help you get started.</ThemedText>
-          <Collapsible title="File-based routing">
-            <ThemedText>
-              This app has two screens:{' '}
-              <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> and{' '}
-              <ThemedText type="defaultSemiBold">app/(tabs)/explore.tsx</ThemedText>
-            </ThemedText>
-            <ThemedText>
-              The layout file in <ThemedText type="defaultSemiBold">app/(tabs)/_layout.tsx</ThemedText>{' '}
-              sets up the tab navigator.
-            </ThemedText>
-            <ExternalLink href="https://docs.expo.dev/router/introduction">
-              <ThemedText type="link">Learn more</ThemedText>
-            </ExternalLink>
-          </Collapsible>
-      </ParallaxScrollView>
-    )
-}
+  const toggleSwitch = () => setIsEnabled((previousState) => !previousState);
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.label}>Activer le mode sombre :</Text>
+      <Switch
+        trackColor={{ false: "#767577", true: "#81b0ff" }}
+        thumbColor={isEnabled ? "#007AFF" : "#f4f3f4"}
+        ios_backgroundColor="#3e3e3e"
+        onValueChange={toggleSwitch}
+        value={isEnabled}
+      />
+      <Text>{isEnabled ? "Mode Activé" : "Mode Désactivé"}</Text>
+    </View>
+  );
+};
 
 const styles = StyleSheet.create({
-  headerImage: {
-    color: '#808080',
-    bottom: -90,
-    left: -35,
-    position: 'absolute',
+  container: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#f5f5f5",
   },
-  titleContainer: {
-    flexDirection: 'row',
-    gap: 8,
+  label: {
+    fontSize: 18,
+    marginBottom: 10,
+  },
+  result: {
+    marginTop: 20,
+    fontSize: 16,
+    fontWeight: "bold",
+    color: "blue",
   },
 });
+
+const pickerSelectStyles = {
+  inputIOS: {
+    fontSize: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: "gray",
+    borderRadius: 4,
+    color: "black",
+    paddingRight: 30,
+    backgroundColor: "white",
+  },
+  inputAndroid: {
+    fontSize: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: "gray",
+    borderRadius: 4,
+    color: "black",
+    paddingRight: 30,
+    backgroundColor: "white",
+  },
+};
+
+export default App;

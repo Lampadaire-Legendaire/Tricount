@@ -1,11 +1,52 @@
-import { Image, StyleSheet, TextInput, Text, View, Platform } from 'react-native';
+import { Image, StyleSheet, TextInput, View, Text, Switch } from 'react-native';
+import React, {useState} from "react";
+import RNPickerSelect from "react-native-picker-select";
 
-import { HelloWave } from '@/components/HelloWave';
 import ParallaxScrollView from '@/components/ParallaxScrollView';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import { Float } from 'react-native/Libraries/Types/CodegenTypes';
 
 export default function HomeScreen() {
+  const [selectedValue, setSelectedValue] = useState<string>("option1");
+  const [selectedValueMoney, setSelectedValueMoney] = useState<string>("euro");
+
+  const [isAllEnabled, setAllIsEnabled] = useState(true);
+  const toggleSwitchAll = () => {
+    toggleSwitchUAlone();
+    toggleSwitchU2Alone();
+    toggleSwitchU3Alone();
+    toggleSwitchAllAlone();
+  };
+  const toggleSwitchAllAlone = () => setAllIsEnabled((previousState) => !previousState);
+
+  const [isUEnabled, setUIsEnabled]= useState(true)
+  const toggleSwitchU = () => {
+    if (isU2Enabled && isU3Enabled)
+      toggleSwitchAllAlone();
+    toggleSwitchUAlone();
+  };
+  const toggleSwitchUAlone = () => setUIsEnabled((previousState) => !previousState);
+
+  const [isU2Enabled, setU2IsEnabled]= useState(true)
+  const toggleSwitchU2 = () => {
+    if (isUEnabled && isU2Enabled)
+      toggleSwitchAllAlone();
+    toggleSwitchU2Alone();
+  };
+  const toggleSwitchU2Alone = () => setU2IsEnabled((previousState) => !previousState);
+
+  const [isU3Enabled, setU3IsEnabled]= useState(true)
+  const toggleSwitchU3 = () => {
+    if (isUEnabled&& isU2Enabled)
+      toggleSwitchAllAlone();
+    toggleSwitchU3Alone();
+  };
+  const toggleSwitchU3Alone = () => setU3IsEnabled((previousState) => !previousState);
+
+  const [price, setPrice] = useState<Float>()
+
+
   return (
     <ParallaxScrollView
       headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
@@ -17,14 +58,76 @@ export default function HomeScreen() {
       }>
         <ThemedView style={styles.titleContainer}>
         <View>
-          <ThemedText>Nom :</ThemedText>
-          <TextInput style={styles.txtInput} placeholder='Courses'/>
+          <ThemedText>Titre :</ThemedText>
+          <TextInput
+            style={styles.txtInput}
+            placeholder='Courses, etc.'
+          />
         </View>
 
         <View>
           <ThemedText>Prix :</ThemedText>
-          <TextInput style={styles.txtInput} placeholder='0.00' keyboardType='number-pad'/>
+          <View style={styles.containerPrice}>
+            <TextInput style={styles.txtInputPrice} placeholder='0,00' keyboardType='number-pad'/>
+            <RNPickerSelect
+            onValueChange = {(value) => setSelectedValueMoney(value)}
+            items={[
+              { label : "€", value : "euro" },
+              { label : "£", value : "livre" },
+              { label : "$", value : "dollar" },
+            ]}
+            style = {pickerMStyle}
+            placeholder={{}}
+          />
+          </View>
         </View>
+  
+        <View>
+          <ThemedText>Payé par:</ThemedText>
+          <RNPickerSelect
+            onValueChange = {(value) => setSelectedValue(value)}
+            items={[
+              { label : "Utilisateur 1", value : "option1" },
+              { label : "Utilisateur 2", value : "option2" },
+              { label : "Utilisateur 3", value : "option3" },
+            ]}
+            style = {pickerStyle}
+            placeholder={{}}
+          />
+        </View>
+
+        <View style={styles.containerLine}>
+          <Switch
+            onValueChange={toggleSwitchAll}
+            value={isAllEnabled}
+          />
+          <ThemedText>Partager</ThemedText>
+        </View>
+
+        <View style={styles.containerLine}>
+          <Switch
+            onValueChange={toggleSwitchU}
+            value={isUEnabled}
+          />
+          <ThemedText>Utilisateur 1</ThemedText>
+        </View>
+
+        <View style={styles.containerLine}>
+          <Switch
+            onValueChange={toggleSwitchU2}
+            value={isU2Enabled}
+          />
+          <ThemedText>Utilisateur 2</ThemedText>
+        </View>
+
+        <View style={styles.containerLine}>
+          <Switch
+            onValueChange={toggleSwitchU3}
+            value={isU3Enabled}
+          />
+          <ThemedText>Utilisateur 3</ThemedText>
+        </View>
+
         {/* <ThemedText type="title">Welcome!</ThemedText>
         <HelloWave />
       </ThemedView>
@@ -82,12 +185,69 @@ const styles = StyleSheet.create({
   },
   txtInput: {
     borderColor: "black",
-    borderWidth: 1
+    borderWidth: 1,
+    backgroundColor: "white",
+  },
+  txtInputPrice: {
+    borderColor: "black",
+    borderWidth: 1,
+    backgroundColor: "white",
+    minWidth: 320
   },
   container: {
     flex: 1,
     flexDirection: "column",
     justifyContent: "center",
     alignItems: "flex-start"
+  },
+  containerPrice: {
+    flex: 1,
+    flexDirection: "row",
+    justifyContent: "space-evenly"
+  },
+  containerLine: {
+    flex: 1,
+    flexDirection: "row",
   }
 });
+
+const pickerStyle = {
+  inputAndroid: {
+    fontSize: 11,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: "gray",
+    color: "black",
+    paddingRight: 30,
+    backgroundColor: "lightgrey",
+  },
+  inputIOS: {
+    fontSize: 11,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: "gray",
+    color: "black",
+    paddingRight: 30,
+    backgroundColor: "lightgrey",
+  },
+};
+
+const pickerMStyle = {
+  inputAndroid: {
+    fontSize: 11,
+    paddingHorizontal: 50,
+    borderWidth: 1,
+    borderColor: "white",
+    color: "black",
+    backgroundColor: "lightgrey",
+  },
+  inputIOS: {
+    fontSize: 11,
+    paddingHorizontal: 50,
+    borderWidth: 1,
+    borderColor: "white",
+    color: "black",
+    backgroundColor: "lightgrey",
+    length: "30px"
+  },
+}
