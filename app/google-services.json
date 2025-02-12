@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "568147150559",
+    "project_id": "tricount-ejm",
+    "storage_bucket": "tricount-ejm.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:568147150559:android:ab6d237a198550e0680b6a",
+        "android_client_info": {
+          "package_name": "com.ejm.tricount"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD2OQBXWNPGj61b0NnU1cAd6uabSIX4ybM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
