@@ -1,11 +1,23 @@
-import { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, Pressable, Alert } from 'react-native';
+import { useState, useEffect, useMemo } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  ActivityIndicator,
+  Pressable,
+  Alert,
+} from 'react-native';
 import Modal from 'react-native-modal';
 import { Picker } from '@react-native-picker/picker';
 import { Ionicons } from '@expo/vector-icons';
 import { getGroups } from '../../services/groups';
-import { calculateBalances, calculatePaymentSuggestions } from '../../services/balances';
+import {
+  calculateBalances,
+  calculatePaymentSuggestions,
+} from '../../services/balances';
 import { createPayment } from '../../services/payments';
+import { useAuth } from '../../lib/auth-context';
 import type { Group } from '../../types/group';
 import type { Balance } from '../../services/balances';
 import type { PaymentSuggestion } from '../../types/payment';
@@ -17,20 +29,36 @@ export default function BalanceScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const { user } = useAuth();
+
+  // Utiliser useMemo pour calculer les suggestions à partir des balances
+  const suggestions = useMemo(() => {
+    return calculatePaymentSuggestions(balances);
+  }, [balances]);
+
+  // Calculer le solde total
+  const totalBalance = useMemo(() => {
+    return balances.reduce((sum, balance) => sum + balance.amount, 0);
+  }, [balances]);
 
   useEffect(() => {
-    loadGroups();
-  }, []);
+    if (user) {
+      loadGroups();
+    }
+  }, [user]);
 
   useEffect(() => {
-    loadBalances();
-  }, [selectedGroup]);
+    if (user) {
+      loadBalances();
+    }
+  }, [selectedGroup, user]);
 
   const loadGroups = async () => {
     try {
       const fetchedGroups = await getGroups();
       setGroups(fetchedGroups);
     } catch (err) {
+      console.error('Erreur lors du chargement des groupes:', err);
       setError('Erreur lors du chargement des groupes');
     }
   };
@@ -38,27 +66,28 @@ export default function BalanceScreen() {
   const loadBalances = async () => {
     try {
       setIsLoading(true);
-      const fetchedBalances = await calculateBalances(selectedGroup || undefined);
+      const fetchedBalances = await calculateBalances(
+        selectedGroup || undefined
+      );
       setBalances(fetchedBalances);
     } catch (err) {
+      console.error('Erreur lors du calcul des soldes:', err);
       setError('Erreur lors du calcul des soldes');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const totalBalance = balances.reduce((sum, balance) => sum + balance.amount, 0);
-
-  const suggestions = calculatePaymentSuggestions(balances);
-
   const handlePaymentConfirmation = async (suggestion: PaymentSuggestion) => {
     Alert.alert(
       'Confirmer le remboursement',
-      `Confirmez-vous que ${suggestion.fromName} a remboursé ${suggestion.amount.toFixed(2)}€ à ${suggestion.toName} ?`,
+      `Confirmez-vous que ${
+        suggestion.fromName
+      } a remboursé ${suggestion.amount.toFixed(2)}€ à ${suggestion.toName} ?`,
       [
         {
           text: 'Annuler',
-          style: 'cancel'
+          style: 'cancel',
         },
         {
           text: 'Confirmer',
@@ -75,12 +104,15 @@ export default function BalanceScreen() {
               await loadBalances();
               Alert.alert('Succès', 'Le remboursement a été enregistré');
             } catch (err) {
-              Alert.alert('Erreur', 'Une erreur est survenue lors de l\'enregistrement du remboursement');
+              Alert.alert(
+                'Erreur',
+                "Une erreur est survenue lors de l'enregistrement du remboursement"
+              );
             } finally {
               setIsLoading(false);
             }
-          }
-        }
+          },
+        },
       ]
     );
   };
@@ -89,16 +121,46 @@ export default function BalanceScreen() {
     setShowSuggestions(false);
   };
 
+  if (isLoading) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color="#2563EB" />
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.centerContainer}>
+        <Text style={styles.error}>{error}</Text>
+        <Pressable onPress={loadBalances} style={styles.retryButton}>
+          <Text style={styles.retryButtonText}>Réessayer</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  // Si l'utilisateur n'est pas connecté, afficher un message
+  if (!user) {
+    return (
+      <View style={styles.centerContainer}>
+        <Text style={styles.emptyText}>
+          Connectez-vous pour voir vos équilibres
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.filterContainer}>
         <Picker
           selectedValue={selectedGroup}
-          onValueChange={itemValue => setSelectedGroup(itemValue)}
+          onValueChange={(itemValue) => setSelectedGroup(itemValue)}
           style={styles.picker}
         >
           <Picker.Item label="Tous les groupes" value="" />
-          {groups.map(group => (
+          {groups.map((group) => (
             <Picker.Item key={group.id} label={group.name} value={group.id} />
           ))}
         </Picker>
@@ -108,14 +170,16 @@ export default function BalanceScreen() {
 
       <View style={styles.summary}>
         <Text style={styles.summaryTitle}>Balance Globale</Text>
-        <Text style={[
-          styles.summaryTotal,
-          totalBalance > 0 ? styles.positive : styles.negative
-        ]}>
+        <Text
+          style={[
+            styles.summaryTotal,
+            totalBalance > 0 ? styles.positive : styles.negative,
+          ]}
+        >
           {totalBalance.toFixed(2)}€
         </Text>
         {suggestions.length > 0 && (
-          <Pressable 
+          <Pressable
             style={styles.suggestionsButton}
             onPress={() => setShowSuggestions(true)}
           >
@@ -129,16 +193,21 @@ export default function BalanceScreen() {
 
       <FlatList
         data={balances}
-        keyExtractor={(item) => `${item.groupId}-${item.participantId}`}
+        keyExtractor={(item, index) =>
+          `${item.groupId || 'no-group'}-${item.participantId}-${index}`
+        }
         renderItem={({ item }) => (
           <View style={styles.balanceCard}>
             <View style={styles.balanceHeader}>
               <Text style={styles.personName}>{item.participantName}</Text>
-              <Text style={[
-                styles.balanceAmount,
-                item.amount > 0 ? styles.positive : styles.negative
-              ]}>
-                {item.amount > 0 ? '+' : ''}{item.amount.toFixed(2)}€
+              <Text
+                style={[
+                  styles.balanceAmount,
+                  item.amount > 0 ? styles.positive : styles.negative,
+                ]}
+              >
+                {item.amount > 0 ? '+' : ''}
+                {item.amount.toFixed(2)}€
               </Text>
             </View>
             {!selectedGroup && (
@@ -149,7 +218,11 @@ export default function BalanceScreen() {
         ListEmptyComponent={
           !isLoading && (
             <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>Aucun solde à afficher</Text>
+              <Text style={styles.emptyText}>
+                {groups.length > 0
+                  ? 'Aucun solde à afficher'
+                  : "Créez d'abord un groupe"}
+              </Text>
             </View>
           )
         }
@@ -168,19 +241,16 @@ export default function BalanceScreen() {
           <View style={styles.modalIndicator} />
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Suggestions de remboursement</Text>
-            <Pressable 
-              onPress={handleCloseModal}
-              style={styles.closeButton}
-            >
+            <Pressable onPress={handleCloseModal} style={styles.closeButton}>
               <Ionicons name="close" size={24} color="#6B7280" />
             </Pressable>
           </View>
-          
+
           <FlatList
             data={suggestions}
             keyExtractor={(_, index) => index.toString()}
             renderItem={({ item }) => (
-              <Pressable 
+              <Pressable
                 style={styles.suggestionCard}
                 onPress={() => {
                   handleCloseModal();
@@ -200,11 +270,20 @@ export default function BalanceScreen() {
                 )}
               </Pressable>
             )}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>
+                  Aucune suggestion de remboursement
+                </Text>
+              </View>
+            }
           />
         </View>
       </Modal>
 
-      {isLoading && <ActivityIndicator style={styles.loader} size="large" color="#2563EB" />}
+      {isLoading && (
+        <ActivityIndicator style={styles.loader} size="large" color="#2563EB" />
+      )}
     </View>
   );
 }
@@ -213,6 +292,12 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
   },
   filterContainer: {
     padding: 10,
@@ -280,6 +365,18 @@ const styles = StyleSheet.create({
     color: '#DC2626',
     padding: 16,
     textAlign: 'center',
+  },
+  retryButton: {
+    backgroundColor: '#2563EB',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginTop: 12,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '500',
   },
   loader: {
     position: 'absolute',

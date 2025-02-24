@@ -1,70 +1,219 @@
-import { collection, addDoc, serverTimestamp, query, getDocs, orderBy, where, doc, runTransaction } from 'firebase/firestore';
+import {
+  collection,
+  addDoc,
+  getDocs,
+  query,
+  where,
+  orderBy,
+  updateDoc,
+  doc,
+  getDoc,
+  deleteDoc,
+} from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Expense } from '../types/expense';
 
-export const createExpense = async (
-  title: string,
-  amount: number,
-  groupId: string,
-  paidBy: string
-): Promise<string> => {
+// Collection de référence
+const expensesCollection = collection(db, 'expenses');
+const groupsCollection = collection(db, 'groups');
+
+// Récupérer l'utilisateur actuel depuis AsyncStorage
+const getCurrentUser = async () => {
   try {
-    const expenseRef = doc(collection(db, 'expenses'));
-    const groupRef = doc(db, 'groups', groupId);
-
-    await runTransaction(db, async (transaction) => {
-      // Lecture du groupe AVANT toute écriture
-      const groupDoc = await transaction.get(groupRef);
-      if (!groupDoc.exists()) {
-        throw new Error('Group not found');
-      }
-
-      // Préparation des données
-      const currentTotal = groupDoc.data().total || 0;
-      const expenseData = {
-        id: expenseRef.id,
-        title,
-        amount,
-        groupId,
-        paidBy,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      };
-
-      // Écritures après toutes les lectures
-      transaction.set(expenseRef, expenseData);
-      transaction.update(groupRef, {
-        total: currentTotal + amount,
-        updatedAt: serverTimestamp(),
-      });
-    });
-
-    return expenseRef.id;
+    const userJson = await AsyncStorage.getItem('currentUser');
+    if (!userJson) {
+      return null;
+    }
+    return JSON.parse(userJson);
   } catch (error) {
-    console.error('Error creating expense:', error);
-    throw new Error('Failed to create expense');
+    console.error("Erreur lors de la récupération de l'utilisateur:", error);
+    return null;
   }
 };
 
-export async function getExpenses(groupId: string): Promise<Expense[]> {
+// Créer une nouvelle dépense
+export async function createExpense(
+  groupId: string,
+  title: string,
+  amount: number,
+  paidBy: { id: string; name: string },
+  participants: { id: string; name: string }[]
+) {
   try {
-    // Requête simple sans orderBy pour éviter le besoin d'index composite
-    const q = query(
-      collection(db, 'expenses'),
-      where('groupId', '==', groupId)
-    );
-    
-    const querySnapshot = await getDocs(q);
-    const expenses = querySnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-      createdAt: doc.data().createdAt?.toDate().getTime() || Date.now(),
-    })) as Expense[];
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+      console.warn(
+        'Tentative de création de dépense sans utilisateur connecté'
+      );
+      return null;
+    }
 
-    // Tri côté client
-    return expenses.sort((a, b) => b.createdAt - a.createdAt);
+    const newExpense = {
+      groupId,
+      title,
+      amount,
+      paidBy,
+      participants,
+      createdAt: new Date().toISOString(),
+      createdBy: currentUser.id,
+    };
+
+    // Ajouter la dépense
+    const docRef = await addDoc(expensesCollection, newExpense);
+
+    // Mettre à jour le total du groupe
+    const groupRef = doc(db, 'groups', groupId);
+    const groupSnap = await getDoc(groupRef);
+
+    if (groupSnap.exists()) {
+      const groupData = groupSnap.data();
+      await updateDoc(groupRef, {
+        total: (groupData.total || 0) + amount,
+      });
+    }
+
+    return { id: docRef.id, ...newExpense };
   } catch (error) {
-    console.error('Error fetching expenses:', error);
-    throw new Error('Failed to fetch expenses');
+    console.error('Erreur lors de la création de la dépense:', error);
+    throw error;
   }
-} 
+}
+
+// Récupérer toutes les dépenses d'un groupe
+export async function getExpenses(groupId: string) {
+  try {
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+      console.warn(
+        'Tentative de récupération des dépenses sans utilisateur connecté'
+      );
+      return [];
+    }
+
+    const q = query(
+      expensesCollection,
+      where('groupId', '==', groupId),
+      orderBy('createdAt', 'desc')
+    );
+
+    const querySnapshot = await getDocs(q);
+
+    const expenses: Expense[] = [];
+    querySnapshot.forEach((doc) => {
+      expenses.push({ id: doc.id, ...doc.data() } as Expense);
+    });
+
+    return expenses;
+  } catch (error) {
+    console.error('Erreur lors de la récupération des dépenses:', error);
+    return [];
+  }
+}
+
+// Mettre à jour une dépense
+export async function updateExpense(
+  expenseId: string,
+  title: string,
+  amount: number,
+  paidBy: { id: string; name: string },
+  participants: { id: string; name: string }[]
+) {
+  try {
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+      console.warn(
+        'Tentative de mise à jour de dépense sans utilisateur connecté'
+      );
+      return null;
+    }
+
+    // Récupérer l'ancienne dépense pour calculer la différence de montant
+    const expenseRef = doc(db, 'expenses', expenseId);
+    const expenseSnap = await getDoc(expenseRef);
+
+    if (!expenseSnap.exists()) {
+      throw new Error('Dépense non trouvée');
+    }
+
+    const oldExpense = expenseSnap.data();
+    const amountDifference = amount - oldExpense.amount;
+
+    // Mettre à jour la dépense
+    await updateDoc(expenseRef, {
+      title,
+      amount,
+      paidBy,
+      participants,
+    });
+
+    // Mettre à jour le total du groupe si le montant a changé
+    if (amountDifference !== 0) {
+      const groupRef = doc(db, 'groups', oldExpense.groupId);
+      const groupSnap = await getDoc(groupRef);
+
+      if (groupSnap.exists()) {
+        const groupData = groupSnap.data();
+        await updateDoc(groupRef, {
+          total: (groupData.total || 0) + amountDifference,
+        });
+      }
+    }
+
+    return {
+      id: expenseId,
+      groupId: oldExpense.groupId,
+      title,
+      amount,
+      paidBy,
+      participants,
+      createdAt: oldExpense.createdAt,
+      createdBy: oldExpense.createdBy,
+    };
+  } catch (error) {
+    console.error('Erreur lors de la mise à jour de la dépense:', error);
+    throw error;
+  }
+}
+
+// Supprimer une dépense
+export async function deleteExpense(expenseId: string) {
+  try {
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+      console.warn(
+        'Tentative de suppression de dépense sans utilisateur connecté'
+      );
+      return false;
+    }
+
+    // Récupérer la dépense pour soustraire son montant du total du groupe
+    const expenseRef = doc(db, 'expenses', expenseId);
+    const expenseSnap = await getDoc(expenseRef);
+
+    if (!expenseSnap.exists()) {
+      throw new Error('Dépense non trouvée');
+    }
+
+    const expense = expenseSnap.data();
+
+    // Supprimer la dépense
+    await deleteDoc(expenseRef);
+
+    // Mettre à jour le total du groupe
+    const groupRef = doc(db, 'groups', expense.groupId);
+    const groupSnap = await getDoc(groupRef);
+
+    if (groupSnap.exists()) {
+      const groupData = groupSnap.data();
+      await updateDoc(groupRef, {
+        total: (groupData.total || 0) - expense.amount,
+      });
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Erreur lors de la suppression de la dépense:', error);
+    throw error;
+  }
+}

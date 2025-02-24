@@ -1,10 +1,18 @@
 import { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  Pressable,
+  ActivityIndicator,
+} from 'react-native';
 import { Link } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { getGroups } from '../../services/groups';
 import { getExpenses } from '../../services/expenses';
+import { auth } from '../../lib/firebase';
 import type { Group } from '../../types/group';
 import type { Expense } from '../../types/expense';
 
@@ -19,13 +27,23 @@ export default function ExpensesScreen() {
     try {
       setIsLoading(true);
       setError(null);
-      
+
+      // Vérifier si l'utilisateur est connecté
+      if (!auth.currentUser) {
+        setGroups([]);
+        setExpenses([]);
+        setIsLoading(false);
+        return;
+      }
+
       // Charger les groupes
       const fetchedGroups = await getGroups();
       setGroups(fetchedGroups);
-      
+
       // Si aucun groupe n'est sélectionné, prendre le premier
-      const groupId = selectedGroupId || (fetchedGroups.length > 0 ? fetchedGroups[0].id : '');
+      const groupId =
+        selectedGroupId ||
+        (fetchedGroups.length > 0 ? fetchedGroups[0].id : '');
       setSelectedGroupId(groupId);
 
       if (groupId) {
@@ -83,14 +101,14 @@ export default function ExpensesScreen() {
             <Pressable
               style={[
                 styles.filterButton,
-                selectedGroupId === item.id && styles.filterButtonActive
+                selectedGroupId === item.id && styles.filterButtonActive,
               ]}
               onPress={() => handleGroupSelect(item.id)}
             >
               <Text
                 style={[
                   styles.filterButtonText,
-                  selectedGroupId === item.id && styles.filterButtonTextActive
+                  selectedGroupId === item.id && styles.filterButtonTextActive,
                 ]}
               >
                 {item.name}
@@ -99,6 +117,9 @@ export default function ExpensesScreen() {
           )}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.filterList}
+          ListEmptyComponent={
+            <Text style={styles.emptyFilterText}>Aucun groupe disponible</Text>
+          }
         />
       </View>
 
@@ -124,20 +145,26 @@ export default function ExpensesScreen() {
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>
-              Aucune dépense pour ce groupe
+              {groups.length > 0
+                ? 'Aucune dépense pour ce groupe'
+                : "Créez d'abord un groupe"}
             </Text>
-            <Text style={styles.emptySubtext}>
-              Ajoutez votre première dépense !
-            </Text>
+            {groups.length > 0 && (
+              <Text style={styles.emptySubtext}>
+                Ajoutez votre première dépense !
+              </Text>
+            )}
           </View>
         }
       />
 
-      <Link href="/new-expense" asChild>
-        <Pressable style={styles.addButton}>
-          <Ionicons name="add" size={28} color="#fff" />
-        </Pressable>
-      </Link>
+      {groups.length > 0 && (
+        <Link href="/new-expense" asChild>
+          <Pressable style={styles.addButton}>
+            <Ionicons name="add" size={28} color="#fff" />
+          </Pressable>
+        </Link>
+      )}
     </View>
   );
 }
@@ -157,6 +184,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#E5E7EB',
     borderRadius: 8,
+    marginHorizontal: 4,
   },
   filterButtonActive: {
     borderColor: '#2563EB',
@@ -170,6 +198,11 @@ const styles = StyleSheet.create({
     color: '#2563EB',
   },
   filterList: {
+    padding: 10,
+  },
+  emptyFilterText: {
+    fontSize: 14,
+    color: '#6B7280',
     padding: 10,
   },
   expenseCard: {

@@ -10,14 +10,18 @@
   },
   "dependencies": {
     "@expo/vector-icons": "^14.0.2",
+    "@firebase/auth": "^1.9.0",
     "@gorhom/bottom-sheet": "4",
-    "@react-native-async-storage/async-storage": "1.21.0",
+    "@react-native-async-storage/async-storage": "^1.24.0",
     "@react-native-picker/picker": "2.9.0",
     "@react-navigation/bottom-tabs": "^7.2.0",
     "@react-navigation/native": "^7.0.14",
-    "expo": "^52.0.33",
+    "dotenv": "^16.3.1",
+    "expo": "^52.0.37",
     "expo-blur": "^14.0.3",
-    "expo-constants": "^17.0.5",
+    "expo-checkbox": "~4.0.1",
+    "expo-constants": "~14.4.2",
+    "expo-crypto": "^14.0.2",
     "expo-font": "^13.0.3",
     "expo-haptics": "^14.0.1",
     "expo-linear-gradient": "^14.0.2",
@@ -39,8 +43,7 @@
     "react-native-screens": "^4.4.0",
     "react-native-url-polyfill": "^2.0.0",
     "react-native-web": "^0.19.13",
-    "react-native-webview": "13.12.5",
-    "expo-checkbox": "~4.0.1"
+    "react-native-webview": "13.12.5"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",

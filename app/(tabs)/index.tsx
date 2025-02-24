@@ -1,101 +1,151 @@
-import { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator, Alert, TextInput, Modal } from 'react-native';
-import { Link, useRouter } from 'expo-router';
+import { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  Pressable,
+  ActivityIndicator,
+  Alert,
+  TextInput,
+  Modal,
+} from 'react-native';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect } from '@react-navigation/native';
 import { getGroups, deleteGroup } from '../../services/groups';
+import { useAuth } from '../../lib/auth-context';
 import type { Group } from '../../types/group';
 
 export default function HomeScreen() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [filteredGroups, setFilteredGroups] = useState<Group[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
-  const router = useRouter();
+  const { user } = useAuth();
+  const params = useLocalSearchParams();
+
+  useEffect(() => {
+    if (user) {
+      console.log('Chargement des groupes...');
+      loadGroups();
+    } else {
+      setIsLoading(false);
+      setGroups([]);
+      setFilteredGroups([]);
+    }
+  }, [user, params.refresh]);
 
   const loadGroups = async () => {
     try {
       setIsLoading(true);
       setError(null);
+
       const fetchedGroups = await getGroups();
+      console.log(`${fetchedGroups.length} groupes chargés`);
       setGroups(fetchedGroups);
       setFilteredGroups(fetchedGroups);
     } catch (err) {
-      setError('Impossible de charger les groupes');
+      console.error('Erreur lors de la récupération des groupes:', err);
+      setError('Impossible de charger vos groupes');
     } finally {
       setIsLoading(false);
     }
   };
 
-  useFocusEffect(
-    useCallback(() => {
-      loadGroups();
-    }, [])
-  );
-
   const handleSearch = (text: string) => {
     setSearchQuery(text);
-    const filtered = groups.filter(group => 
-      group.name.toLowerCase().includes(text.toLowerCase()) ||
-      group.participants.some(p => p.name.toLowerCase().includes(text.toLowerCase()))
-    );
-    setFilteredGroups(filtered);
-  };
-
-  const handleDeleteGroup = (groupId: string, groupName: string) => {
-    Alert.alert(
-      'Supprimer le groupe',
-      `Êtes-vous sûr de vouloir supprimer le groupe "${groupName}" ?`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Supprimer',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setIsLoading(true);
-              await deleteGroup(groupId);
-              await loadGroups();
-            } catch (err) {
-              Alert.alert('Erreur', 'Impossible de supprimer le groupe');
-            } finally {
-              setIsLoading(false);
-            }
-          }
-        }
-      ]
-    );
-  };
-
-  const handleLongPress = (group: Group) => {
-    Alert.alert(
-      group.name,
-      'Que souhaitez-vous faire ?',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Modifier',
-          style: 'default',
-          onPress: () => {
-            router.push({
-              pathname: '/edit-group',
-              params: { groupId: group.id }
-            });
-          }
-        },
-        {
-          text: 'Supprimer',
-          style: 'destructive',
-          onPress: () => handleDeleteGroup(group.id, group.name),
-        },
-      ]
-    );
+    if (text) {
+      const filtered = groups.filter(
+        (group) =>
+          group.name.toLowerCase().includes(text.toLowerCase()) ||
+          group.participants.some((p) =>
+            p.name.toLowerCase().includes(text.toLowerCase())
+          )
+      );
+      setFilteredGroups(filtered);
+    } else {
+      setFilteredGroups(groups);
+    }
   };
 
   const handleGroupPress = (group: Group) => {
     setSelectedGroup(group);
+  };
+
+  const handleLongPress = (group: Group) => {
+    Alert.alert('Options', `Que souhaitez-vous faire avec "${group.name}" ?`, [
+      {
+        text: 'Annuler',
+        style: 'cancel',
+      },
+      {
+        text: 'Modifier',
+        onPress: () => {
+          // Navigation vers l'écran d'édition
+          router.push({
+            pathname: '/edit-group',
+            params: { id: group.id },
+          });
+        },
+      },
+      {
+        text: 'Supprimer',
+        style: 'destructive',
+        onPress: () => confirmDelete(group),
+      },
+    ]);
+  };
+
+  const confirmDelete = (group: Group) => {
+    Alert.alert(
+      'Confirmer la suppression',
+      `Êtes-vous sûr de vouloir supprimer "${group.name}" ?`,
+      [
+        {
+          text: 'Annuler',
+          style: 'cancel',
+        },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: () => handleDeleteGroup(group.id),
+        },
+      ]
+    );
+  };
+
+  const handleDeleteGroup = async (groupId: string) => {
+    try {
+      setIsLoading(true);
+      await deleteGroup(groupId);
+
+      // Mettre à jour la liste des groupes
+      setGroups(groups.filter((g) => g.id !== groupId));
+      setFilteredGroups(filteredGroups.filter((g) => g.id !== groupId));
+
+      Alert.alert('Succès', 'Le groupe a été supprimé');
+    } catch (error) {
+      console.error('Erreur lors de la suppression du groupe:', error);
+      Alert.alert('Erreur', 'Impossible de supprimer le groupe');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Fonction pour naviguer vers la page de création de groupe
+  const navigateToNewGroup = () => {
+    console.log('Navigation vers la page de création de groupe');
+    try {
+      router.push('/new-group');
+    } catch (error) {
+      console.error('Erreur de navigation:', error);
+      Alert.alert(
+        'Erreur',
+        "Impossible d'accéder à la page de création de groupe"
+      );
+    }
   };
 
   if (isLoading) {
@@ -120,7 +170,12 @@ export default function HomeScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.searchContainer}>
-        <Ionicons name="search" size={20} color="#6B7280" style={styles.searchIcon} />
+        <Ionicons
+          name="search"
+          size={20}
+          color="#6B7280"
+          style={styles.searchIcon}
+        />
         <TextInput
           style={styles.searchInput}
           placeholder="Rechercher un groupe / un participant..."
@@ -129,7 +184,7 @@ export default function HomeScreen() {
           placeholderTextColor="#9CA3AF"
         />
         {searchQuery !== '' && (
-          <Pressable 
+          <Pressable
             onPress={() => handleSearch('')}
             style={styles.clearButton}
           >
@@ -138,14 +193,83 @@ export default function HomeScreen() {
         )}
       </View>
 
+      {/* Bouton temporaire pour tester les invitations */}
+      <Pressable
+        style={styles.testButton}
+        onPress={() => {
+          console.log('Navigation vers la page de test des invitations');
+          try {
+            // Utiliser une navigation plus directe
+            router.navigate('/test-invitations');
+            console.log('Navigation réussie');
+          } catch (error) {
+            console.error('Erreur de navigation:', error);
+            Alert.alert(
+              'Erreur',
+              `Impossible d'accéder à la page de test: ${error.message}`
+            );
+          }
+        }}
+      >
+        <Text style={styles.testButtonText}>Tester les invitations</Text>
+      </Pressable>
+
+      {/* Bouton pour le test direct de Firebase */}
+      <Pressable
+        style={[
+          styles.testButton,
+          { backgroundColor: '#DC2626', marginTop: 8 },
+        ]}
+        onPress={() => {
+          console.log('Navigation vers la page de test direct Firebase');
+          try {
+            // Navigation directe vers une page dans le même dossier (tabs)
+            router.push('/(tabs)/firebase-direct-test');
+            console.log('Navigation réussie');
+          } catch (error) {
+            console.error('Erreur de navigation:', error);
+            Alert.alert(
+              'Erreur',
+              `Impossible d'accéder à la page de test: ${error.message}`
+            );
+          }
+        }}
+      >
+        <Text style={styles.testButtonText}>Test Firebase Direct</Text>
+      </Pressable>
+
+      {/* Bouton pour le test direct des invitations */}
+      <Pressable
+        style={[
+          styles.testButton,
+          { backgroundColor: '#8B5CF6', marginTop: 8 },
+        ]}
+        onPress={() => {
+          console.log('Navigation vers la page de test direct des invitations');
+          try {
+            // Navigation directe vers une page dans le même dossier (tabs)
+            router.push('/(tabs)/invitations-direct-test');
+            console.log('Navigation réussie');
+          } catch (error) {
+            console.error('Erreur de navigation:', error);
+            Alert.alert(
+              'Erreur',
+              `Impossible d'accéder à la page de test: ${error.message}`
+            );
+          }
+        }}
+      >
+        <Text style={styles.testButtonText}>Test Invitations Direct</Text>
+      </Pressable>
+
       <FlatList
         data={filteredGroups}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <Pressable 
+          <Pressable
             style={({ pressed }) => [
               styles.groupCard,
-              pressed && styles.groupCardPressed
+              pressed && styles.groupCardPressed,
             ]}
             onPress={() => handleGroupPress(item)}
             onLongPress={() => handleLongPress(item)}
@@ -157,35 +281,26 @@ export default function HomeScreen() {
               </Text>
             </View>
             <View style={styles.groupTotal}>
-              <Text style={styles.totalAmount}>
-                {item.total.toFixed(2)}€
-              </Text>
+              <Text style={styles.totalAmount}>{item.total.toFixed(2)}€</Text>
               <Text style={styles.totalLabel}>Total</Text>
             </View>
           </Pressable>
         )}
         ListEmptyComponent={
-          !isLoading && (
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>
-                {searchQuery ? "Aucun résultat trouvé" : "Aucun groupe pour le moment"}
-              </Text>
-              <Text style={styles.emptySubtext}>
-                {searchQuery ? "Essayez d'autres termes de recherche" : "Créez votre premier groupe pour commencer !"}
-              </Text>
-            </View>
-          )
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>Aucun groupe trouvé</Text>
+            <Text style={styles.emptySubtext}>
+              Créez votre premier groupe en cliquant sur le bouton ci-dessous
+            </Text>
+          </View>
         }
+        refreshing={isLoading}
+        onRefresh={loadGroups}
       />
-      {isLoading && <ActivityIndicator style={styles.loader} size="large" color="#2563EB" />}
 
-      <View style={styles.createButtonContainer}>
-        <Link href="/new-group" asChild>
-          <Pressable style={styles.createButton}>
-            <Ionicons name="add" size={28} color="#fff" />
-          </Pressable>
-        </Link>
-      </View>
+      <Pressable style={styles.createButton} onPress={navigateToNewGroup}>
+        <Ionicons name="add" size={24} color="#fff" />
+      </Pressable>
 
       <Modal
         visible={selectedGroup !== null}
@@ -193,7 +308,7 @@ export default function HomeScreen() {
         animationType="fade"
         onRequestClose={() => setSelectedGroup(null)}
       >
-        <Pressable 
+        <Pressable
           style={styles.modalOverlay}
           onPress={() => setSelectedGroup(null)}
         >
@@ -216,7 +331,25 @@ export default function HomeScreen() {
 
             <View style={styles.modalSection}>
               <Text style={styles.modalSectionTitle}>Total des dépenses</Text>
-              <Text style={styles.modalTotal}>{selectedGroup?.total.toFixed(2)}€</Text>
+              <Text style={styles.modalTotal}>
+                {selectedGroup?.total.toFixed(2)}€
+              </Text>
+            </View>
+
+            <View style={styles.modalActions}>
+              <Pressable
+                style={styles.actionButton}
+                onPress={() => {
+                  setSelectedGroup(null);
+                  router.push({
+                    pathname: '/new-expense',
+                    params: { groupId: selectedGroup?.id },
+                  });
+                }}
+              >
+                <Ionicons name="add-circle-outline" size={20} color="#fff" />
+                <Text style={styles.actionButtonText}>Nouvelle dépense</Text>
+              </Pressable>
             </View>
           </View>
         </Pressable>
@@ -254,16 +387,14 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
   },
-  createButtonContainer: {
+  createButton: {
     position: 'absolute',
     bottom: 16,
-    alignSelf: 'center',
-  },
-  createButton: {
+    right: 16,
     backgroundColor: '#2563EB',
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
@@ -271,14 +402,14 @@ const styles = StyleSheet.create({
       width: 0,
       height: 2,
     },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
   groupCard: {
     backgroundColor: '#fff',
-    marginHorizontal: 18,
-    marginBottom: 12,
+    marginHorizontal: 16,
+    marginVertical: 8,
     padding: 16,
     borderRadius: 12,
     flexDirection: 'row',
@@ -340,9 +471,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
-    marginHorizontal: 'auto',
-    marginVertical: 8,
-    marginBottom: 16,
+    marginHorizontal: 16,
+    marginVertical: 16,
     paddingHorizontal: 12,
     borderRadius: 8,
     borderWidth: 1,
@@ -354,9 +484,7 @@ const styles = StyleSheet.create({
     },
     shadowOpacity: 0.1,
     shadowRadius: 1,
-    elevation: 3,
-    width: '90%',
-    alignSelf: 'center',
+    elevation: 1,
   },
   searchIcon: {
     marginRight: 8,
@@ -369,9 +497,6 @@ const styles = StyleSheet.create({
   },
   clearButton: {
     padding: 4,
-  },
-  loader: {
-    marginTop: 16,
   },
   modalOverlay: {
     flex: 1,
@@ -425,8 +550,39 @@ const styles = StyleSheet.create({
     color: '#1F2937',
   },
   modalTotal: {
-    fontSize: 24,
+    fontSize: 18,
     fontWeight: '600',
     color: '#2563EB',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  actionButton: {
+    backgroundColor: '#2563EB',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  actionButtonText: {
+    color: '#fff',
+    marginLeft: 8,
+    fontWeight: '500',
+  },
+  testButton: {
+    backgroundColor: '#F59E0B',
+    marginHorizontal: 16,
+    marginBottom: 8,
+    padding: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  testButtonText: {
+    color: '#fff',
+    fontWeight: '600',
   },
 });
