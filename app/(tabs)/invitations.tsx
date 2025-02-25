@@ -5,11 +5,11 @@ import {
   StyleSheet,
   FlatList,
   Pressable,
-  ActivityIndicator,
   Alert,
+  ActivityIndicator,
   RefreshControl,
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../lib/auth-context';
 import {
@@ -22,39 +22,41 @@ import { addParticipantToGroup } from '../../services/groups';
 export default function InvitationsScreen() {
   const [invitations, setInvitations] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
   const { user } = useAuth();
+  const params = useLocalSearchParams();
 
   useEffect(() => {
     if (user) {
       loadInvitations();
     }
-  }, [user]);
+  }, [user, params.refresh]);
 
   const loadInvitations = async () => {
     try {
       setIsLoading(true);
-      setError(null);
       console.log('Chargement des invitations...');
-
-      const pendingInvitations = await getPendingInvitations(user.id);
-      console.log(
-        `${pendingInvitations.length} invitations en attente trouvées`
-      );
-      setInvitations(pendingInvitations);
-    } catch (err) {
-      console.error('Erreur lors du chargement des invitations:', err);
-      setError('Impossible de charger vos invitations');
+      const userInvitations = await getPendingInvitations(user.id);
+      console.log(`${userInvitations.length} invitations trouvées`);
+      setInvitations(userInvitations);
+    } catch (error) {
+      console.error('Erreur lors du chargement des invitations:', error);
+      Alert.alert('Erreur', 'Impossible de charger les invitations');
     } finally {
       setIsLoading(false);
-      setIsRefreshing(false);
+      setRefreshing(false);
     }
   };
 
   const handleRefresh = () => {
-    setIsRefreshing(true);
+    setRefreshing(true);
     loadInvitations();
+  };
+
+  const updateGlobalInvitationsCount = () => {
+    // Cette fonction sera appelée après chaque action sur une invitation
+    // Le compteur sera mis à jour automatiquement lors du prochain rendu
+    // grâce au useEffect dans app.tsx
   };
 
   const handleAcceptInvitation = async (invitation) => {
@@ -119,46 +121,11 @@ export default function InvitationsScreen() {
     }
   };
 
-  const renderInvitationItem = ({ item }) => (
-    <View style={styles.invitationCard}>
-      <View style={styles.invitationInfo}>
-        <Text style={styles.groupName}>{item.groupName}</Text>
-        <Text style={styles.invitationText}>
-          {item.senderName} vous invite à rejoindre ce groupe
-        </Text>
-      </View>
-      <View style={styles.invitationActions}>
-        <Pressable
-          style={[styles.actionButton, styles.acceptButton]}
-          onPress={() => handleAcceptInvitation(item)}
-        >
-          <Ionicons name="checkmark" size={20} color="#fff" />
-        </Pressable>
-        <Pressable
-          style={[styles.actionButton, styles.declineButton]}
-          onPress={() => handleDeclineInvitation(item)}
-        >
-          <Ionicons name="close" size={20} color="#fff" />
-        </Pressable>
-      </View>
-    </View>
-  );
-
-  if (isLoading && !isRefreshing) {
+  if (isLoading && !refreshing) {
     return (
-      <View style={styles.centerContainer}>
+      <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#2563EB" />
-      </View>
-    );
-  }
-
-  if (error) {
-    return (
-      <View style={styles.centerContainer}>
-        <Text style={styles.errorText}>{error}</Text>
-        <Pressable onPress={loadInvitations} style={styles.retryButton}>
-          <Text style={styles.retryButtonText}>Réessayer</Text>
-        </Pressable>
+        <Text style={styles.loadingText}>Chargement des invitations...</Text>
       </View>
     );
   }
@@ -168,17 +135,51 @@ export default function InvitationsScreen() {
       <FlatList
         data={invitations}
         keyExtractor={(item) => item.id}
-        renderItem={renderInvitationItem}
-        refreshControl={
-          <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />
-        }
+        renderItem={({ item }) => (
+          <View style={styles.invitationCard}>
+            <View style={styles.invitationHeader}>
+              <Text style={styles.groupName}>{item.groupName}</Text>
+              <Text style={styles.invitationDate}>
+                {new Date(item.createdAt).toLocaleDateString()}
+              </Text>
+            </View>
+            <Text style={styles.invitationText}>
+              <Text style={styles.senderName}>{item.senderName}</Text> vous
+              invite à rejoindre ce groupe
+            </Text>
+            <View style={styles.actionButtons}>
+              <Pressable
+                style={[styles.actionButton, styles.declineButton]}
+                onPress={() => handleDeclineInvitation(item)}
+              >
+                <Ionicons name="close" size={20} color="#fff" />
+                <Text style={styles.buttonText}>Refuser</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.actionButton, styles.acceptButton]}
+                onPress={() => handleAcceptInvitation(item)}
+              >
+                <Ionicons name="checkmark" size={20} color="#fff" />
+                <Text style={styles.buttonText}>Accepter</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
+            <Ionicons name="mail-open-outline" size={64} color="#9CA3AF" />
             <Text style={styles.emptyText}>Aucune invitation en attente</Text>
-            <Text style={styles.emptySubtext}>
-              Les invitations que vous recevez apparaîtront ici
-            </Text>
           </View>
+        }
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            colors={['#2563EB']}
+          />
+        }
+        contentContainerStyle={
+          invitations.length === 0 ? { flex: 1 } : styles.listContent
         }
       />
     </View>
@@ -188,93 +189,88 @@ export default function InvitationsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#F3F4F6',
   },
-  centerContainer: {
+  loadingContainer: {
     flex: 1,
-    backgroundColor: '#f3f4f6',
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: '#4B5563',
+  },
+  listContent: {
     padding: 16,
-  },
-  errorText: {
-    color: '#DC2626',
-    fontSize: 16,
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  retryButton: {
-    backgroundColor: '#2563EB',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  retryButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '500',
   },
   invitationCard: {
-    backgroundColor: '#fff',
-    marginHorizontal: 16,
-    marginVertical: 8,
-    padding: 16,
+    backgroundColor: '#FFFFFF',
     borderRadius: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    padding: 16,
+    marginBottom: 16,
     shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 1,
-    },
+    shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.1,
     shadowRadius: 2,
     elevation: 2,
   },
-  invitationInfo: {
-    flex: 1,
+  invitationHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
   },
   groupName: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 4,
+    color: '#111827',
   },
-  invitationText: {
+  invitationDate: {
     fontSize: 14,
     color: '#6B7280',
   },
-  invitationActions: {
+  invitationText: {
+    fontSize: 16,
+    color: '#4B5563',
+    marginBottom: 16,
+  },
+  senderName: {
+    fontWeight: '600',
+  },
+  actionButtons: {
     flexDirection: 'row',
-    marginLeft: 16,
+    justifyContent: 'space-between',
   },
   actionButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
+    flexDirection: 'row',
     alignItems: 'center',
-    marginLeft: 8,
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    flex: 0.48,
   },
   acceptButton: {
-    backgroundColor: '#10B981',
+    backgroundColor: '#2563EB',
   },
   declineButton: {
     backgroundColor: '#EF4444',
   },
+  buttonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    marginLeft: 6,
+  },
   emptyContainer: {
-    padding: 32,
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
   },
   emptyText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 8,
-  },
-  emptySubtext: {
-    fontSize: 14,
+    marginTop: 16,
+    fontSize: 16,
     color: '#6B7280',
     textAlign: 'center',
   },

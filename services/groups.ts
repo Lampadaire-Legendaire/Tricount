@@ -6,8 +6,6 @@ import {
   doc,
   updateDoc,
   deleteDoc,
-  query,
-  where,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -75,13 +73,21 @@ export async function createGroup(
     console.log(`Participants confirmés: ${confirmedParticipants.length}`);
     console.log(`Participants en attente: ${pendingParticipants.length}`);
 
-    // Créer le groupe avec les participants confirmés
+    // Créer la liste des emails invités pour les règles de sécurité
+    const invitedEmails = pendingParticipants
+      .filter((p) => p.email)
+      .map((p) => p.email);
+
+    console.log(`Emails invités: ${invitedEmails.join(', ')}`);
+
+    // Créer les données du groupe
     const groupData = {
       name,
       participants: confirmedParticipants.map((p) => ({
         id: p.id,
         name: p.name,
       })),
+      invitedUsers: invitedEmails,
       createdBy: currentUser.id,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -135,37 +141,44 @@ export async function createGroup(
   }
 }
 
-// Récupérer tous les groupes de l'utilisateur
+// Récupérer les groupes de l'utilisateur
 export async function getGroups() {
   try {
-    const currentUser = await getCurrentUser();
-    if (!currentUser) {
+    const user = await getCurrentUser();
+    if (!user) {
+      console.error('Aucun utilisateur connecté');
       return [];
     }
 
+    console.log(`Récupération des groupes pour l'utilisateur ${user.id}`);
+
+    // Récupérer tous les groupes
     const groupsCollection = collection(db, 'groups');
+    const snapshot = await getDocs(groupsCollection);
 
-    // Requête pour trouver les groupes où l'utilisateur est participant
-    const q = query(
-      groupsCollection,
-      where('participants', 'array-contains', {
-        id: currentUser.id,
-        name: currentUser.name,
+    if (snapshot.empty) {
+      console.log('Aucun groupe trouvé');
+      return [];
+    }
+
+    // Filtrer les groupes où l'utilisateur est un participant actif
+    // (et non pas simplement invité)
+    const userGroups = snapshot.docs
+      .map((doc) => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          createdAt: data.createdAt || Date.now(),
+        };
       })
-    );
-
-    const querySnapshot = await getDocs(q);
-    const groups = [];
-
-    querySnapshot.forEach((doc) => {
-      groups.push({
-        id: doc.id,
-        ...doc.data(),
+      .filter((group) => {
+        // Vérifier si l'utilisateur est un participant actif du groupe
+        return group.participants.some((p) => p.id === user.id);
       });
-    });
 
-    // Trier les groupes par date de création (du plus récent au plus ancien)
-    return groups.sort((a, b) => b.createdAt - a.createdAt);
+    console.log(`${userGroups.length} groupes trouvés pour l'utilisateur`);
+    return userGroups;
   } catch (error) {
     console.error('Erreur lors de la récupération des groupes:', error);
     throw error;
@@ -242,26 +255,32 @@ export async function addParticipantToGroup(
   try {
     console.log(`Ajout de ${participant.name} au groupe ${groupId}`);
 
-    // Récupérer le groupe actuel
-    const groupDoc = await getGroupById(groupId);
+    // Récupérer le groupe
+    const groupRef = doc(db, 'groups', groupId);
+    const groupDoc = await getDoc(groupRef);
+
+    if (!groupDoc.exists()) {
+      throw new Error('Groupe non trouvé');
+    }
+
+    const groupData = groupDoc.data();
 
     // Vérifier si le participant existe déjà
-    if (groupDoc.participants.some((p) => p.id === participant.id)) {
+    if (groupData.participants.some((p) => p.id === participant.id)) {
       console.log('Le participant existe déjà dans le groupe');
       return; // Le participant existe déjà
     }
 
     // Ajouter le participant à la liste
-    const updatedParticipants = [...groupDoc.participants, participant];
+    const updatedParticipants = [...groupData.participants, participant];
 
     // Mettre à jour le groupe
-    const docRef = doc(db, 'groups', groupId);
-    await updateDoc(docRef, {
+    await updateDoc(groupRef, {
       participants: updatedParticipants,
       updatedAt: Date.now(),
     });
 
-    console.log(`${participant.name} ajouté au groupe ${groupDoc.name}`);
+    console.log(`${participant.name} ajouté au groupe ${groupData.name}`);
   } catch (error) {
     console.error("Erreur lors de l'ajout du participant:", error);
     throw error;
@@ -281,3 +300,5 @@ export async function updateGroupTotal(groupId: string, newTotal: number) {
     throw error;
   }
 }
+
+export { getGroups as getUserGroups };

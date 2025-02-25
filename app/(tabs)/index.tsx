@@ -9,10 +9,12 @@ import {
   Alert,
   TextInput,
   Modal,
+  RefreshControl,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { getGroups, deleteGroup } from '../../services/groups';
+import { getPendingInvitations } from '../../services/invitations';
 import { useAuth } from '../../lib/auth-context';
 import type { Group } from '../../types/group';
 
@@ -23,6 +25,8 @@ export default function HomeScreen() {
   const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [invitationsCount, setInvitationsCount] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   const { user } = useAuth();
   const params = useLocalSearchParams();
 
@@ -30,6 +34,7 @@ export default function HomeScreen() {
     if (user) {
       console.log('Chargement des groupes...');
       loadGroups();
+      loadInvitationsCount();
     } else {
       setIsLoading(false);
       setGroups([]);
@@ -39,7 +44,9 @@ export default function HomeScreen() {
 
   const loadGroups = async () => {
     try {
-      setIsLoading(true);
+      if (!refreshing) {
+        setIsLoading(true);
+      }
       setError(null);
 
       const fetchedGroups = await getGroups();
@@ -51,7 +58,23 @@ export default function HomeScreen() {
       setError('Impossible de charger vos groupes');
     } finally {
       setIsLoading(false);
+      setRefreshing(false);
     }
+  };
+
+  const loadInvitationsCount = async () => {
+    try {
+      const invitations = await getPendingInvitations(user.id);
+      setInvitationsCount(invitations.length);
+    } catch (error) {
+      console.error('Erreur lors du chargement des invitations:', error);
+    }
+  };
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadGroups();
+    loadInvitationsCount();
   };
 
   const handleSearch = (text: string) => {
@@ -128,27 +151,37 @@ export default function HomeScreen() {
       Alert.alert('Succès', 'Le groupe a été supprimé');
     } catch (error) {
       console.error('Erreur lors de la suppression du groupe:', error);
-      Alert.alert('Erreur', 'Impossible de supprimer le groupe');
+
+      // Vérifier si l'erreur est liée aux permissions
+      if (
+        (error instanceof Error &&
+          error.message.includes("n'êtes pas autorisé")) ||
+        error.message.includes('not authorized')
+      ) {
+        Alert.alert(
+          'Accès refusé',
+          "Vous n'êtes pas autorisé à supprimer ce groupe. Seul le créateur du groupe peut le supprimer."
+        );
+      } else {
+        Alert.alert('Erreur', 'Impossible de supprimer le groupe');
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Fonction pour naviguer vers la page de création de groupe
-  const navigateToNewGroup = () => {
-    console.log('Navigation vers la page de création de groupe');
-    try {
-      router.push('/new-group');
-    } catch (error) {
-      console.error('Erreur de navigation:', error);
-      Alert.alert(
-        'Erreur',
-        "Impossible d'accéder à la page de création de groupe"
-      );
-    }
+  const handleViewGroup = (groupId: string, groupName: string) => {
+    // Fermer la modal
+    setSelectedGroup(null);
+
+    // Naviguer vers la page de détail du groupe
+    router.push({
+      pathname: '/group-details',
+      params: { id: groupId, name: groupName },
+    });
   };
 
-  if (isLoading) {
+  if (isLoading && !refreshing) {
     return (
       <View style={styles.centerContainer}>
         <ActivityIndicator size="large" color="#2563EB" />
@@ -158,9 +191,9 @@ export default function HomeScreen() {
 
   if (error) {
     return (
-      <View style={styles.centerContainer}>
+      <View style={styles.errorContainer}>
         <Text style={styles.errorText}>{error}</Text>
-        <Pressable onPress={loadGroups} style={styles.retryButton}>
+        <Pressable style={styles.retryButton} onPress={loadGroups}>
           <Text style={styles.retryButtonText}>Réessayer</Text>
         </Pressable>
       </View>
@@ -169,191 +202,161 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.searchContainer}>
-        <Ionicons
-          name="search"
-          size={20}
-          color="#6B7280"
-          style={styles.searchIcon}
-        />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Rechercher un groupe / un participant..."
-          value={searchQuery}
-          onChangeText={handleSearch}
-          placeholderTextColor="#9CA3AF"
-        />
-        {searchQuery !== '' && (
+      <View style={styles.header}>
+        <Text style={styles.title}>Mes groupes</Text>
+        {invitationsCount > 0 && (
           <Pressable
-            onPress={() => handleSearch('')}
-            style={styles.clearButton}
+            style={styles.invitationNotification}
+            onPress={() => router.push('/(tabs)/invitations')}
           >
-            <Ionicons name="close-circle" size={20} color="#6B7280" />
+            <Ionicons name="mail" size={20} color="#FFFFFF" />
+            <Text style={styles.invitationNotificationText}>
+              {invitationsCount}{' '}
+              {invitationsCount > 1 ? 'invitations' : 'invitation'}
+            </Text>
           </Pressable>
         )}
       </View>
 
-      {/* Bouton temporaire pour tester les invitations */}
-      <Pressable
-        style={styles.testButton}
-        onPress={() => {
-          console.log('Navigation vers la page de test des invitations');
-          try {
-            // Utiliser une navigation plus directe
-            router.navigate('/test-invitations');
-            console.log('Navigation réussie');
-          } catch (error) {
-            console.error('Erreur de navigation:', error);
-            Alert.alert(
-              'Erreur',
-              `Impossible d'accéder à la page de test: ${error.message}`
-            );
-          }
-        }}
-      >
-        <Text style={styles.testButtonText}>Tester les invitations</Text>
-      </Pressable>
-
-      {/* Bouton pour le test direct de Firebase */}
-      <Pressable
-        style={[
-          styles.testButton,
-          { backgroundColor: '#DC2626', marginTop: 8 },
-        ]}
-        onPress={() => {
-          console.log('Navigation vers la page de test direct Firebase');
-          try {
-            // Navigation directe vers une page dans le même dossier (tabs)
-            router.push('/(tabs)/firebase-direct-test');
-            console.log('Navigation réussie');
-          } catch (error) {
-            console.error('Erreur de navigation:', error);
-            Alert.alert(
-              'Erreur',
-              `Impossible d'accéder à la page de test: ${error.message}`
-            );
-          }
-        }}
-      >
-        <Text style={styles.testButtonText}>Test Firebase Direct</Text>
-      </Pressable>
-
-      {/* Bouton pour le test direct des invitations */}
-      <Pressable
-        style={[
-          styles.testButton,
-          { backgroundColor: '#8B5CF6', marginTop: 8 },
-        ]}
-        onPress={() => {
-          console.log('Navigation vers la page de test direct des invitations');
-          try {
-            // Navigation directe vers une page dans le même dossier (tabs)
-            router.push('/(tabs)/invitations-direct-test');
-            console.log('Navigation réussie');
-          } catch (error) {
-            console.error('Erreur de navigation:', error);
-            Alert.alert(
-              'Erreur',
-              `Impossible d'accéder à la page de test: ${error.message}`
-            );
-          }
-        }}
-      >
-        <Text style={styles.testButtonText}>Test Invitations Direct</Text>
-      </Pressable>
-
-      <FlatList
-        data={filteredGroups}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <Pressable
-            style={({ pressed }) => [
-              styles.groupCard,
-              pressed && styles.groupCardPressed,
-            ]}
-            onPress={() => handleGroupPress(item)}
-            onLongPress={() => handleLongPress(item)}
-          >
-            <View style={styles.groupInfo}>
-              <Text style={styles.groupName}>{item.name}</Text>
-              <Text style={styles.groupMembers}>
-                {item.participants.length} participants
-              </Text>
-            </View>
-            <View style={styles.groupTotal}>
-              <Text style={styles.totalAmount}>{item.total.toFixed(2)}€</Text>
-              <Text style={styles.totalLabel}>Total</Text>
-            </View>
+      <View style={styles.searchContainer}>
+        <Ionicons name="search" size={20} color="#6B7280" />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Rechercher un groupe..."
+          value={searchQuery}
+          onChangeText={handleSearch}
+        />
+        {searchQuery ? (
+          <Pressable onPress={() => handleSearch('')}>
+            <Ionicons name="close-circle" size={20} color="#6B7280" />
           </Pressable>
-        )}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>Aucun groupe trouvé</Text>
-            <Text style={styles.emptySubtext}>
-              Créez votre premier groupe en cliquant sur le bouton ci-dessous
-            </Text>
-          </View>
-        }
-        refreshing={isLoading}
-        onRefresh={loadGroups}
-      />
+        ) : null}
+      </View>
 
-      <Pressable style={styles.createButton} onPress={navigateToNewGroup}>
-        <Ionicons name="add" size={24} color="#fff" />
-      </Pressable>
-
-      <Modal
-        visible={selectedGroup !== null}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setSelectedGroup(null)}
-      >
-        <Pressable
-          style={styles.modalOverlay}
-          onPress={() => setSelectedGroup(null)}
-        >
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{selectedGroup?.name}</Text>
-              <Pressable onPress={() => setSelectedGroup(null)}>
-                <Ionicons name="close" size={24} color="#6B7280" />
-              </Pressable>
-            </View>
-
-            <View style={styles.modalSection}>
-              <Text style={styles.modalSectionTitle}>Participants</Text>
-              {selectedGroup?.participants.map((participant, index) => (
-                <View key={index} style={styles.participantRow}>
-                  <Text style={styles.participantName}>{participant.name}</Text>
-                </View>
-              ))}
-            </View>
-
-            <View style={styles.modalSection}>
-              <Text style={styles.modalSectionTitle}>Total des dépenses</Text>
-              <Text style={styles.modalTotal}>
-                {selectedGroup?.total.toFixed(2)}€
+      {isLoading && !refreshing ? (
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color="#2563EB" />
+        </View>
+      ) : error ? (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{error}</Text>
+          <Pressable style={styles.retryButton} onPress={loadGroups}>
+            <Text style={styles.retryButtonText}>Réessayer</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <FlatList
+          data={filteredGroups}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <Pressable
+              style={styles.groupCard}
+              onPress={() => handleGroupPress(item)}
+              onLongPress={() => handleLongPress(item)}
+              delayLongPress={500}
+            >
+              <View style={styles.groupInfo}>
+                <Text style={styles.groupName}>{item.name}</Text>
+                <Text style={styles.participantsCount}>
+                  {item.participants.length}{' '}
+                  {item.participants.length > 1
+                    ? 'participants'
+                    : 'participant'}
+                </Text>
+              </View>
+              <View style={styles.groupTotal}>
+                <Text style={styles.totalLabel}>Total</Text>
+                <Text style={styles.totalAmount}>
+                  {item.total ? `${item.total.toFixed(2)} €` : '0.00 €'}
+                </Text>
+              </View>
+            </Pressable>
+          )}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>
+                Vous n'avez pas encore de groupe.
+              </Text>
+              <Text style={styles.emptySubText}>
+                Créez un groupe pour commencer à partager des dépenses.
               </Text>
             </View>
+          }
+          contentContainerStyle={
+            filteredGroups.length === 0 ? { flex: 1 } : { paddingBottom: 80 }
+          }
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              colors={['#2563EB']}
+            />
+          }
+        />
+      )}
 
-            <View style={styles.modalActions}>
-              <Pressable
-                style={styles.actionButton}
-                onPress={() => {
-                  setSelectedGroup(null);
-                  router.push({
-                    pathname: '/new-expense',
-                    params: { groupId: selectedGroup?.id },
-                  });
-                }}
-              >
-                <Ionicons name="add-circle-outline" size={20} color="#fff" />
-                <Text style={styles.actionButtonText}>Nouvelle dépense</Text>
-              </Pressable>
+      {selectedGroup && (
+        <Modal
+          visible={!!selectedGroup}
+          animationType="slide"
+          transparent={true}
+          onRequestClose={() => setSelectedGroup(null)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>{selectedGroup.name}</Text>
+                <Pressable onPress={() => setSelectedGroup(null)}>
+                  <Ionicons name="close" size={24} color="#6B7280" />
+                </Pressable>
+              </View>
+
+              <View style={styles.modalSection}>
+                <Text style={styles.modalSectionTitle}>Participants</Text>
+                {selectedGroup.participants.map((participant) => (
+                  <View key={participant.id} style={styles.participantRow}>
+                    <Text style={styles.participantName}>
+                      {participant.name}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+
+              <View style={styles.modalSection}>
+                <Text style={styles.modalSectionTitle}>Total des dépenses</Text>
+                <Text style={styles.modalTotal}>
+                  {selectedGroup.total.toFixed(2)} €
+                </Text>
+              </View>
+
+              <View style={styles.modalActions}>
+                <Pressable
+                  style={styles.closeModalButton}
+                  onPress={() => setSelectedGroup(null)}
+                >
+                  <Ionicons
+                    name="close-circle-outline"
+                    size={20}
+                    color="#FFFFFF"
+                  />
+                  <Text style={styles.actionButtonText}>Fermer</Text>
+                </Pressable>
+              </View>
             </View>
           </View>
+        </Modal>
+      )}
+
+      {/* Bouton de création de groupe */}
+      <View style={styles.newButtonContainer}>
+        <Pressable
+          style={styles.newButton}
+          onPress={() => router.push('/new-group')}
+        >
+          <Ionicons name="add" size={24} color="#FFFFFF" />
+          <Text style={styles.newButtonText}>Nouveau groupe</Text>
         </Pressable>
-      </Modal>
+      </View>
     </View>
   );
 }
@@ -462,7 +465,7 @@ const styles = StyleSheet.create({
     color: '#1F2937',
     marginBottom: 8,
   },
-  emptySubtext: {
+  emptySubText: {
     fontSize: 14,
     color: '#6B7280',
     textAlign: 'center',
@@ -584,5 +587,103 @@ const styles = StyleSheet.create({
   testButtonText: {
     color: '#fff',
     fontWeight: '600',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  addButton: {
+    backgroundColor: '#2563EB',
+    padding: 10,
+    borderRadius: 8,
+    marginLeft: 'auto',
+  },
+  addButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    color: '#6B7280',
+    fontSize: 16,
+    marginTop: 16,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  participantsCount: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  newButtonContainer: {
+    position: 'absolute',
+    bottom: 20,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  newButton: {
+    backgroundColor: '#2563EB',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 30,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  newButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  invitationNotification: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EF4444',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    marginLeft: 'auto',
+  },
+  invitationNotificationText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 6,
+  },
+  editButton: {
+    backgroundColor: '#F59E0B',
+  },
+  deleteButton: {
+    backgroundColor: '#DC2626',
+  },
+  closeModalButton: {
+    backgroundColor: '#6B7280',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    flex: 1,
   },
 });

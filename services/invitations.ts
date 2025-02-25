@@ -7,10 +7,9 @@ import {
   doc,
   getDoc,
   updateDoc,
-  setDoc,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { getUserById, searchUserByEmail } from './users';
+import { getUserById } from './users';
 
 // Interface pour les invitations
 export interface Invitation {
@@ -36,81 +35,36 @@ export async function createInvitation(
   senderName: string
 ): Promise<string> {
   try {
+    console.log('=== DÉBUT createInvitation ===');
     console.log(
-      `Création d'une invitation pour ${recipientEmail} au groupe ${groupName} (ID: ${groupId})`
+      `Création d'invitation pour ${recipientEmail} au groupe ${groupName} (ID: ${groupId})`
     );
     console.log(`Expéditeur: ${senderName} (ID: ${senderId})`);
 
-    // Vérifier si l'utilisateur existe
-    const recipient = await searchUserByEmail(recipientEmail);
-    console.log(
-      `Destinataire trouvé: ${
-        recipient ? 'Oui (ID: ' + recipient.id + ')' : 'Non'
-      }`
-    );
-
-    // Créer les données de l'invitation
+    // Créer les données de l'invitation sans vérification préalable
     const invitationData = {
       groupId,
       groupName,
       recipientEmail,
-      recipientId: recipient ? recipient.id : null,
       senderId,
       senderName,
       status: 'pending',
       createdAt: Date.now(),
     };
 
-    console.log("Données de l'invitation:", JSON.stringify(invitationData));
+    console.log(`Données de l'invitation: ${JSON.stringify(invitationData)}`);
 
-    // Méthode 1: addDoc - Méthode qui fonctionne selon les tests
-    try {
-      const invitationsCollection = collection(db, 'invitations');
-      const docRef = await addDoc(invitationsCollection, invitationData);
-      console.log(`Invitation créée avec succès (addDoc). ID: ${docRef.id}`);
+    // Ajouter directement l'invitation à Firestore
+    const invitationsCollection = collection(db, 'invitations');
+    console.log("Tentative d'ajout à la collection 'invitations'...");
+    const docRef = await addDoc(invitationsCollection, invitationData);
 
-      // Vérifier que l'invitation a été créée
-      const docSnap = await getDoc(doc(db, 'invitations', docRef.id));
-      if (docSnap.exists()) {
-        console.log(`Vérification réussie: l'invitation existe dans Firestore`);
-        return docRef.id;
-      } else {
-        console.error(`Erreur: l'invitation n'a pas été créée correctement`);
-        throw new Error("L'invitation n'a pas été créée correctement");
-      }
-    } catch (error) {
-      console.error(`Erreur avec addDoc: ${error.message}`);
-
-      // Méthode 2: setDoc comme fallback
-      try {
-        const invitationId =
-          'invitation-' +
-          Date.now() +
-          '-' +
-          Math.random().toString(36).substring(2, 9);
-        await setDoc(doc(db, 'invitations', invitationId), invitationData);
-        console.log(
-          `Invitation créée avec succès (setDoc). ID: ${invitationId}`
-        );
-
-        // Vérifier que l'invitation a été créée
-        const docSnap = await getDoc(doc(db, 'invitations', invitationId));
-        if (docSnap.exists()) {
-          console.log(
-            `Vérification réussie: l'invitation existe dans Firestore`
-          );
-          return invitationId;
-        } else {
-          console.error(`Erreur: l'invitation n'a pas été créée correctement`);
-          throw new Error("L'invitation n'a pas été créée correctement");
-        }
-      } catch (secondError) {
-        console.error(`Erreur avec setDoc: ${secondError.message}`);
-        throw secondError;
-      }
-    }
+    console.log(`Invitation créée avec succès. ID: ${docRef.id}`);
+    console.log('=== FIN createInvitation ===');
+    return docRef.id;
   } catch (error) {
-    console.error("Erreur lors de la création de l'invitation:", error);
+    console.error('=== ERREUR dans createInvitation ===');
+    console.error(`Erreur lors de la création de l'invitation:`, error);
     throw error;
   }
 }
@@ -118,7 +72,7 @@ export async function createInvitation(
 /**
  * Récupère les invitations en attente pour un utilisateur
  */
-export async function getPendingInvitations(
+export async function getPendingInvitationsForUser(
   userId: string
 ): Promise<Invitation[]> {
   try {
@@ -133,56 +87,73 @@ export async function getPendingInvitations(
 
     console.log(`Email de l'utilisateur: ${user.email}`);
 
+    const invitationsCollection = collection(db, 'invitations');
+
     // Requête pour les invitations par ID utilisateur
+    console.log(`Recherche des invitations par ID utilisateur: ${userId}`);
     const qById = query(
-      collection(db, 'invitations'),
+      invitationsCollection,
       where('recipientId', '==', userId),
       where('status', '==', 'pending')
     );
 
     // Requête pour les invitations par email
+    console.log(`Recherche des invitations par email: ${user.email}`);
     const qByEmail = query(
-      collection(db, 'invitations'),
+      invitationsCollection,
       where('recipientEmail', '==', user.email),
       where('status', '==', 'pending')
     );
 
-    const [snapshotById, snapshotByEmail] = await Promise.all([
+    const [querySnapshotById, querySnapshotByEmail] = await Promise.all([
       getDocs(qById),
       getDocs(qByEmail),
     ]);
 
-    console.log(`Invitations trouvées par ID: ${snapshotById.size}`);
-    console.log(`Invitations trouvées par email: ${snapshotByEmail.size}`);
+    console.log(`Invitations trouvées par ID: ${querySnapshotById.size}`);
+    console.log(`Invitations trouvées par email: ${querySnapshotByEmail.size}`);
 
     const invitations: Invitation[] = [];
 
     // Ajouter les invitations par ID
-    snapshotById.forEach((doc) => {
+    querySnapshotById.forEach((doc) => {
+      const data = doc.data();
+      console.log(`Invitation par ID: ${doc.id}, groupe: ${data.groupName}`);
       invitations.push({
         id: doc.id,
-        ...doc.data(),
+        ...data,
       } as Invitation);
     });
 
     // Ajouter les invitations par email qui ne sont pas déjà incluses
-    snapshotByEmail.forEach((doc) => {
+    querySnapshotByEmail.forEach((doc) => {
+      const data = doc.data();
+      console.log(`Invitation par email: ${doc.id}, groupe: ${data.groupName}`);
+
       const invitation = {
         id: doc.id,
-        ...doc.data(),
+        ...data,
       } as Invitation;
 
+      // Vérifier si cette invitation n'est pas déjà dans la liste
       if (!invitations.some((inv) => inv.id === invitation.id)) {
+        console.log(`Ajout de l'invitation ${doc.id} à la liste`);
         invitations.push(invitation);
 
         // Mettre à jour l'invitation avec l'ID de l'utilisateur si ce n'est pas déjà fait
-        if (!doc.data().recipientId) {
+        if (!data.recipientId) {
+          console.log(
+            `Mise à jour de l'invitation ${doc.id} avec l'ID utilisateur ${userId}`
+          );
           updateDoc(doc.ref, {
             recipientId: userId,
+            updatedAt: Date.now(),
           }).catch((err) =>
             console.error("Erreur lors de la mise à jour de l'invitation:", err)
           );
         }
+      } else {
+        console.log(`L'invitation ${doc.id} est déjà dans la liste`);
       }
     });
 
@@ -206,11 +177,34 @@ export async function acceptInvitation(invitationId: string): Promise<void> {
       throw new Error('Invitation non trouvée');
     }
 
+    const invitationData = invitationDoc.data();
+    const { groupId, recipientEmail } = invitationData;
+
     // Mettre à jour le statut de l'invitation
     await updateDoc(invitationRef, {
       status: 'accepted',
       updatedAt: Date.now(),
     });
+
+    // Mettre à jour le groupe pour retirer l'email de la liste des invités
+    const groupRef = doc(db, 'groups', groupId);
+    const groupDoc = await getDoc(groupRef);
+
+    if (groupDoc.exists()) {
+      const groupData = groupDoc.data();
+      const invitedUsers = groupData.invitedUsers || [];
+
+      // Filtrer l'email de l'utilisateur qui vient d'accepter
+      const updatedInvitedUsers = invitedUsers.filter(
+        (email) => email !== recipientEmail
+      );
+
+      // Mettre à jour le document du groupe
+      await updateDoc(groupRef, {
+        invitedUsers: updatedInvitedUsers,
+        updatedAt: Date.now(),
+      });
+    }
 
     console.log(`Invitation ${invitationId} acceptée`);
   } catch (error) {
@@ -225,6 +219,13 @@ export async function acceptInvitation(invitationId: string): Promise<void> {
 export async function declineInvitation(invitationId: string): Promise<void> {
   try {
     const invitationRef = doc(db, 'invitations', invitationId);
+    const invitationDoc = await getDoc(invitationRef);
+
+    if (!invitationDoc.exists()) {
+      throw new Error('Invitation non trouvée');
+    }
+
+    // Mettre à jour le statut de l'invitation
     await updateDoc(invitationRef, {
       status: 'declined',
       updatedAt: Date.now(),
@@ -259,3 +260,6 @@ export async function checkInvitationExists(
     throw error;
   }
 }
+
+// Alias pour la compatibilité avec le code existant
+export const getPendingInvitations = getPendingInvitationsForUser;

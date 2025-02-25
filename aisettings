@@ -1,0 +1,22 @@
+# Configuration de l'IA pour l'application
+
+## Paramètres généraux
+- Modèle: Claude 3.7 Sonnet
+- Langue principale: Français
+- Contexte: Application de gestion de dépenses partagées
+
+## Fonctionnalités principales
+- Création de groupes
+- Invitation de participants
+- Gestion des invitations
+- Acceptation/refus des invitations
+
+## Collections Firestore
+- users: Informations sur les utilisateurs
+- groups: Groupes de dépenses partagées
+- invitations: Invitations à rejoindre un groupe
+- expenses: Dépenses enregistrées
+- payments: Paiements effectués
+
+## Règles de sécurité
+Les règles Firestore doivent permettre l'accès aux collections pour les utilisateurs authentifiés. 
