@@ -6,8 +6,9 @@ export default {
   version: '1.0.0',
   orientation: 'portrait',
   userInterfaceStyle: 'light',
+  icon :'./assets/images/icon.png',
   splash: {
-    image: './assets/splashscreen_logo.png',
+    image: './assets/images/splashscreen_logo.png',
     resizeMode: 'contain',
     backgroundColor: '#ffffff',
   },
@@ -23,16 +24,7 @@ export default {
     },
   },
   web: {},
-  plugins: [
-    'expo-router',
-    [
-      'expo-splash-screen',
-      {
-        backgroundColor: '#ffffff',
-        //image: './assets/splash-icon.png',
-      },
-    ],
-  ],
+  plugins: ['expo-router'],
   scheme: 'tricount',
   newArchEnabled: true,
   extra: {

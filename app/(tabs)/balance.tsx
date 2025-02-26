@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,18 +7,28 @@ import {
   ActivityIndicator,
   SafeAreaView,
   ScrollView,
+  Modal,
+  RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../lib/auth-context';
 import { getGroups } from '../../services/groups';
 import { getDeptsByGroupId } from '../../services/depts';
 import type { Group } from '../../types/group';
+import type { Dept } from '../../services/depts';
+
+interface DebtDetail {
+  participantName: string;
+  amount: number;
+}
 
 interface ParticipantBalance {
   name: string;
   totalPaid: number;
   totalOwed: number;
   netBalance: number;
+  debtsToOthers: DebtDetail[];
+  debtsFromOthers: DebtDetail[];
 }
 
 export default function BalanceScreen() {
@@ -29,6 +39,7 @@ export default function BalanceScreen() {
   >([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showGroupSelector, setShowGroupSelector] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const { user } = useAuth();
 
   useEffect(() => {
@@ -64,36 +75,79 @@ export default function BalanceScreen() {
           totalPaid: 0,
           totalOwed: 0,
           netBalance: 0,
+          debtsToOthers: [],
+          debtsFromOthers: [],
         };
       });
 
-      // Calculer les totaux payés et dus
-      depts.forEach((dept) => {
-        // Ajouter le montant total payé
+      // Vérifier que depts existe
+      if (!depts) {
+        setParticipantBalances(Object.values(balances));
+        return;
+      }
+
+      // Calculer les totaux et les dettes détaillées
+      depts.forEach((dept: Dept) => {
+        if (!dept) return; // Ignorer les dettes invalides
+
         const payer = group.participants.find((p) => p.name === dept.payerId);
         if (payer && balances[payer.name]) {
           balances[payer.name].totalPaid += dept.amount;
-        }
 
-        // Ajouter les montants dus
-        dept.debtors.forEach((debtor) => {
-          if (balances[debtor.userId]) {
-            balances[debtor.userId].totalOwed += debtor.amount;
+          // Vérifier que debtors existe
+          if (dept.debtors && Array.isArray(dept.debtors)) {
+            dept.debtors.forEach((debtor) => {
+              if (debtor && debtor.userId && balances[debtor.userId]) {
+                balances[debtor.userId].totalOwed += debtor.amount;
+
+                balances[debtor.userId].debtsToOthers.push({
+                  participantName: payer.name,
+                  amount: debtor.amount,
+                });
+
+                balances[payer.name].debtsFromOthers.push({
+                  participantName: debtor.userId,
+                  amount: debtor.amount,
+                });
+              }
+            });
           }
-        });
+        }
       });
 
-      // Calculer le solde net pour chaque participant
+      // Calculer le solde net et consolider les dettes
       Object.values(balances).forEach((balance) => {
         balance.netBalance = balance.totalPaid - balance.totalOwed;
+        balance.debtsToOthers = consolidateDebts(balance.debtsToOthers || []);
+        balance.debtsFromOthers = consolidateDebts(
+          balance.debtsFromOthers || []
+        );
       });
 
       setParticipantBalances(Object.values(balances));
     } catch (error) {
       console.error('Erreur lors du calcul des soldes:', error);
+      setParticipantBalances([]); // Initialiser avec un tableau vide en cas d'erreur
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Fonction utilitaire pour consolider les dettes par participant
+  const consolidateDebts = (debts: DebtDetail[]): DebtDetail[] => {
+    const consolidatedDebts = new Map<string, number>();
+
+    debts.forEach((debt) => {
+      const currentAmount = consolidatedDebts.get(debt.participantName) || 0;
+      consolidatedDebts.set(debt.participantName, currentAmount + debt.amount);
+    });
+
+    return Array.from(consolidatedDebts.entries()).map(
+      ([participantName, amount]) => ({
+        participantName,
+        amount,
+      })
+    );
   };
 
   useEffect(() => {
@@ -102,7 +156,67 @@ export default function BalanceScreen() {
     }
   }, [selectedGroup]);
 
-  const renderParticipantBalance = (balance: ParticipantBalance) => (
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    if (selectedGroup) {
+      await calculateBalances(selectedGroup);
+    }
+    setRefreshing(false);
+  }, [selectedGroup]);
+
+  const renderGroupSelector = () => (
+    <Pressable
+      style={styles.groupSelector}
+      onPress={() => setShowGroupSelector(true)}
+    >
+      <Text style={styles.groupName}>
+        {selectedGroup?.name || 'Sélectionner un groupe'}
+      </Text>
+      <Ionicons name="chevron-down" size={24} color="#4B5563" />
+    </Pressable>
+  );
+
+  const renderGroupSelectorModal = () => (
+    <Modal
+      visible={showGroupSelector}
+      animationType="slide"
+      transparent={true}
+      onRequestClose={() => setShowGroupSelector(false)}
+    >
+      <View style={styles.modalContainer}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Sélectionner un groupe</Text>
+            <Pressable
+              onPress={() => setShowGroupSelector(false)}
+              style={styles.closeButton}
+            >
+              <Ionicons name="close" size={24} color="#4B5563" />
+            </Pressable>
+          </View>
+          <ScrollView style={styles.groupList}>
+            {groups.map((group) => (
+              <Pressable
+                key={group.id}
+                style={styles.groupItem}
+                onPress={() => {
+                  setSelectedGroup(group);
+                  setShowGroupSelector(false);
+                }}
+              >
+                <Text style={styles.groupItemText}>{group.name}</Text>
+                {selectedGroup?.id === group.id && (
+                  <Ionicons name="checkmark" size={24} color="#2563EB" />
+                )}
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  const renderBalanceCard = (balance: ParticipantBalance) => (
     <View style={styles.balanceCard} key={balance.name}>
       <View style={styles.balanceHeader}>
         <Ionicons name="person-circle" size={40} color="#2563EB" />
@@ -112,49 +226,72 @@ export default function BalanceScreen() {
         <View style={styles.balanceRow}>
           <Text style={styles.balanceLabel}>Total payé</Text>
           <Text style={styles.balanceAmount}>
-            {balance.totalPaid.toFixed(2)}€
+            {(balance.totalPaid || 0).toFixed(2)}€
           </Text>
         </View>
         <View style={styles.balanceRow}>
           <Text style={styles.balanceLabel}>Total dû</Text>
           <Text style={styles.balanceAmount}>
-            {balance.totalOwed.toFixed(2)}€
+            {(balance.totalOwed || 0).toFixed(2)}€
           </Text>
         </View>
-        <View style={[styles.balanceRow, styles.netBalanceRow]}>
-          <Text style={styles.balanceLabel}>Solde net</Text>
-          <Text
-            style={[
-              styles.balanceAmount,
-              balance.netBalance >= 0
-                ? styles.positiveBalance
-                : styles.negativeBalance,
-            ]}
-          >
-            {balance.netBalance.toFixed(2)}€
-          </Text>
-        </View>
+
+        {/* Dettes envers les autres */}
+        {balance.debtsToOthers && balance.debtsToOthers.length > 0 && (
+          <View style={styles.debtsSection}>
+            <Text style={styles.debtsSectionTitle}>Doit :</Text>
+            {balance.debtsToOthers.map((debt, index) => (
+              <View key={`debt-to-${index}`} style={styles.debtRow}>
+                <Text style={styles.debtParticipant}>
+                  {debt.participantName}
+                </Text>
+                <Text style={styles.negativeBalance}>
+                  {(debt.amount || 0).toFixed(2)}€
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Dettes des autres */}
+        {balance.debtsFromOthers && balance.debtsFromOthers.length > 0 && (
+          <View style={styles.debtsSection}>
+            <Text style={styles.debtsSectionTitle}>Doit recevoir :</Text>
+            {balance.debtsFromOthers.map((debt, index) => (
+              <View key={`debt-from-${index}`} style={styles.debtRow}>
+                <Text style={styles.debtParticipant}>
+                  {debt.participantName}
+                </Text>
+                <Text style={styles.positiveBalance}>
+                  {(debt.amount || 0).toFixed(2)}€
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
       </View>
     </View>
   );
 
   return (
     <SafeAreaView style={styles.container}>
-      <Pressable
-        style={styles.groupSelector}
-        onPress={() => setShowGroupSelector(true)}
-      >
-        <Text style={styles.groupName}>
-          {selectedGroup?.name || 'Sélectionner un groupe'}
-        </Text>
-        <Ionicons name="chevron-down" size={24} color="#4B5563" />
-      </Pressable>
+      {renderGroupSelector()}
+      {renderGroupSelectorModal()}
 
       {isLoading ? (
         <ActivityIndicator size="large" color="#2563EB" />
       ) : (
-        <ScrollView style={styles.balanceList}>
-          {participantBalances.map(renderParticipantBalance)}
+        <ScrollView
+          style={styles.balanceList}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              colors={['#2563EB']}
+            />
+          }
+        >
+          {participantBalances.map(renderBalanceCard)}
         </ScrollView>
       )}
     </SafeAreaView>
@@ -225,16 +362,75 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#111827',
   },
-  netBalanceRow: {
+  debtsSection: {
+    marginTop: 12,
+    paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
-    paddingTop: 8,
-    marginTop: 8,
+  },
+  debtsSectionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#4B5563',
+    marginBottom: 8,
+  },
+  debtRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  debtParticipant: {
+    fontSize: 14,
+    color: '#4B5563',
   },
   positiveBalance: {
     color: '#059669',
   },
   negativeBalance: {
     color: '#DC2626',
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  closeButton: {
+    padding: 4,
+  },
+  groupList: {
+    padding: 16,
+  },
+  groupItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  groupItemText: {
+    fontSize: 16,
+    color: '#111827',
   },
 });
