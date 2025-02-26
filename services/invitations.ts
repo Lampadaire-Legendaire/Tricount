@@ -10,6 +10,8 @@ import {
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { getUserById } from './users';
+import { searchUserByEmail } from './users';
+import type { Invitation } from '../types/invitation';
 
 // Interface pour les invitations
 export interface Invitation {
@@ -41,11 +43,34 @@ export async function createInvitation(
     );
     console.log(`Expéditeur: ${senderName} (ID: ${senderId})`);
 
-    // Créer les données de l'invitation sans vérification préalable
+    if (!recipientEmail || !groupId || !senderId) {
+      throw new Error("Paramètres d'invitation incomplets");
+    }
+
+    // Rechercher l'utilisateur destinataire par email
+    let recipientId = null;
+    try {
+      const recipient = await searchUserByEmail(recipientEmail);
+      if (recipient) {
+        recipientId = recipient.id;
+        console.log(`Destinataire trouvé: ID ${recipientId}`);
+      } else {
+        console.log(`Aucun utilisateur trouvé avec l'email ${recipientEmail}`);
+      }
+    } catch (searchError) {
+      console.error(
+        "Erreur lors de la recherche de l'utilisateur:",
+        searchError
+      );
+      // Continuer même si la recherche échoue
+    }
+
+    // Créer les données de l'invitation
     const invitationData = {
       groupId,
       groupName,
       recipientEmail,
+      recipientId,
       senderId,
       senderName,
       status: 'pending',
@@ -263,3 +288,65 @@ export async function checkInvitationExists(
 
 // Alias pour la compatibilité avec le code existant
 export const getPendingInvitations = getPendingInvitationsForUser;
+
+// Envoyer une invitation à un utilisateur
+export async function sendInvitation(
+  groupId: string,
+  groupName: string,
+  recipientEmail: string,
+  senderId: string,
+  senderName: string
+): Promise<string> {
+  try {
+    console.log(
+      `Début de l'envoi d'invitation à ${recipientEmail} pour le groupe ${groupName} (ID: ${groupId})`
+    );
+    console.log(`Expéditeur: ${senderName} (ID: ${senderId})`);
+
+    if (!recipientEmail || !groupId || !senderId) {
+      throw new Error("Paramètres d'invitation incomplets");
+    }
+
+    // Rechercher l'utilisateur destinataire par email
+    let recipientId = null;
+    try {
+      const recipient = await searchUserByEmail(recipientEmail);
+      if (recipient) {
+        recipientId = recipient.id;
+        console.log(`Destinataire trouvé: ID ${recipientId}`);
+      } else {
+        console.log(`Aucun utilisateur trouvé avec l'email ${recipientEmail}`);
+      }
+    } catch (searchError) {
+      console.error(
+        "Erreur lors de la recherche de l'utilisateur:",
+        searchError
+      );
+      // Continuer même si la recherche échoue
+    }
+
+    // Créer les données de l'invitation
+    const invitationData = {
+      groupId,
+      groupName,
+      recipientEmail,
+      recipientId,
+      senderId,
+      senderName,
+      status: 'pending',
+      createdAt: Date.now(),
+    };
+
+    console.log(`Données de l'invitation: ${JSON.stringify(invitationData)}`);
+
+    // Ajouter l'invitation à Firestore
+    const invitationsCollection = collection(db, 'invitations');
+    const docRef = await addDoc(invitationsCollection, invitationData);
+
+    console.log(`Invitation créée avec succès. ID: ${docRef.id}`);
+    return docRef.id;
+  } catch (error) {
+    console.error("Erreur lors de l'envoi de l'invitation:", error);
+    throw error;
+  }
+}

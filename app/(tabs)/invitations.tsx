@@ -17,7 +17,7 @@ import {
   acceptInvitation,
   declineInvitation,
 } from '../../services/invitations';
-import { addParticipantToGroup } from '../../services/groups';
+import { addEditorToGroup } from '../../services/groups';
 
 export default function InvitationsScreen() {
   const [invitations, setInvitations] = useState([]);
@@ -69,10 +69,11 @@ export default function InvitationsScreen() {
       // Accepter l'invitation
       await acceptInvitation(invitation.id);
 
-      // Ajouter l'utilisateur au groupe
-      await addParticipantToGroup(invitation.groupId, {
+      // Ajouter l'utilisateur au groupe en tant qu'éditeur
+      await addEditorToGroup(invitation.groupId, {
         id: user.id,
         name: user.name,
+        email: user.email,
       });
 
       // Mettre à jour la liste des invitations
@@ -80,7 +81,7 @@ export default function InvitationsScreen() {
 
       Alert.alert(
         'Invitation acceptée',
-        `Vous avez rejoint le groupe "${invitation.groupName}"`
+        `Vous avez rejoint le groupe "${invitation.groupName}" en tant qu'éditeur`
       );
 
       // Rediriger vers l'écran d'accueil avec un paramètre pour rafraîchir la liste

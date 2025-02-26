@@ -1,414 +1,688 @@
 import { useState, useEffect } from 'react';
-import { View, Text, TextInput, StyleSheet, Pressable, ScrollView, ActivityIndicator } from 'react-native';
-import { router } from 'expo-router';
+import {
+  View,
+  Text,
+  TextInput,
+  StyleSheet,
+  Pressable,
+  ScrollView,
+  ActivityIndicator,
+  SafeAreaView,
+  Alert,
+} from 'react-native';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Picker } from '@react-native-picker/picker';
-import Checkbox from 'expo-checkbox';
-import { getGroups, getGroupById } from '../services/groups';
-import type { Group, Participant } from '../types/group';
-
-interface SelectedPayer {
-  id: string;
-  name: string;
-  amount: string;
-}
+import { getGroupById } from '../services/groups';
+import { createExpense } from '../services/expenses';
+import { useAuth } from '../lib/auth-context';
+import type { Group } from '../types/group';
+import { createDept } from '../services/depts';
 
 export default function NewExpenseScreen() {
+  const params = useLocalSearchParams();
+  const groupId = params.groupId as string;
+  const { user } = useAuth();
+
+  const [group, setGroup] = useState<Group | null>(null);
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
-  const [selectedGroup, setSelectedGroup] = useState('');
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [participants, setParticipants] = useState<Participant[]>([]);
   const [paidBy, setPaidBy] = useState<string>('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [participants, setParticipants] = useState<
+    { id: string; name: string; selected: boolean }[]
+  >([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [involvedParticipants, setInvolvedParticipants] = useState<Set<string>>(new Set());
-  const [payerParticipates, setPayerParticipates] = useState(true);
+  const [showPaidByDropdown, setShowPaidByDropdown] = useState(false);
 
   useEffect(() => {
-    loadGroups();
-  }, []);
-
-  useEffect(() => {
-    if (selectedGroup) {
-      loadParticipants();
+    if (groupId) {
+      loadGroup();
     } else {
-      setParticipants([]);
-      setInvolvedParticipants(new Set());
+      setError('ID de groupe manquant');
+      setIsLoading(false);
     }
-  }, [selectedGroup]);
+  }, [groupId]);
 
-  const loadGroups = async () => {
-    try {
-      const fetchedGroups = await getGroups();
-      setGroups(fetchedGroups);
-    } catch (err) {
-      setError('Erreur lors du chargement des groupes');
-    }
-  };
-
-  const loadParticipants = async () => {
-    try {
-      const group = await getGroupById(selectedGroup);
-      if (group) {
-        setParticipants(group.participants);
-      }
-    } catch (err) {
-      setError('Erreur lors du chargement des participants');
-    }
-  };
-
-  const getAmountPerPerson = () => {
-    const totalAmount = parseFloat(amount || '0');
-    if (isNaN(totalAmount)) return '0';
-    const numberOfInvolved = involvedParticipants.size + (payerParticipates ? 1 : 0);
-    if (numberOfInvolved === 0) return '0';
-    return (totalAmount / numberOfInvolved).toFixed(2);
-  };
-
-  const toggleInvolvedParticipant = (participantId: string) => {
-    setInvolvedParticipants(current => {
-      const newSet = new Set(current);
-      if (current.has(participantId)) {
-        newSet.delete(participantId);
-      } else {
-        newSet.add(participantId);
-      }
-      return newSet;
-    });
-  };
-
-  const handleSubmit = async () => {
+  const loadGroup = async () => {
     try {
       setIsLoading(true);
       setError(null);
-      
-      const amountNumber = parseFloat(amount.replace(',', '.'));
-      
-      if (isNaN(amountNumber)) {
-        throw new Error('Le montant est invalide');
-      }
-      
-      router.back();
-    } catch (err) {
-      if (err instanceof Error) {
-        setError(err.message);
+      console.log(`Chargement du groupe ${groupId}...`);
+
+      const fetchedGroup = await getGroupById(groupId);
+      console.log('Groupe récupéré:', fetchedGroup);
+
+      if (fetchedGroup) {
+        setGroup(fetchedGroup);
+
+        // Initialiser les participants avec leur nom comme ID
+        const initialParticipants = fetchedGroup.participants.map(
+          (participant) => ({
+            id: participant.name, // Utiliser le nom comme ID
+            name: participant.name,
+            selected: true,
+          })
+        );
+        setParticipants(initialParticipants);
+
+        // Par défaut, le payeur est le premier participant
+        if (initialParticipants.length > 0) {
+          setPaidBy(initialParticipants[0].id);
+        }
       } else {
-        setError('Une erreur est survenue lors de la création de la dépense');
+        setError('Groupe non trouvé');
       }
+    } catch (error) {
+      console.error('Erreur lors du chargement du groupe:', error);
+      setError('Impossible de charger les informations du groupe');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const isValid = title.trim() !== '' && amount.trim() !== '' && selectedGroup !== '' && paidBy !== '';
+  const handleSave = async () => {
+    if (!user || !group) return;
 
-  const selectAllParticipants = () => {
-    const allParticipants = new Set(
-      participants
-        .filter(p => p.id !== paidBy) // Exclure le payeur
-        .map(p => p.id)
+    // Validation des champs
+    if (!title.trim()) {
+      Alert.alert('Erreur', 'Veuillez entrer un titre pour la dépense');
+      return;
+    }
+
+    if (!amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+      Alert.alert('Erreur', 'Veuillez entrer un montant valide');
+      return;
+    }
+
+    if (!paidBy) {
+      Alert.alert('Erreur', 'Veuillez sélectionner qui a payé');
+      return;
+    }
+
+    const selectedParticipants = participants.filter((p) => p.selected);
+    if (selectedParticipants.length === 0) {
+      Alert.alert('Erreur', 'Veuillez sélectionner au moins un participant');
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+
+      const payerParticipant = participants.find((p) => p.id === paidBy);
+
+      if (!payerParticipant) {
+        Alert.alert('Erreur', 'Payeur non trouvé');
+        return;
+      }
+
+      // Créer la dépense
+      const expenseData = {
+        groupId: group.id,
+        title: title.trim(),
+        amount: parseFloat(amount),
+        paidBy: payerParticipant.name,
+        participants: selectedParticipants.map((p) => p.name),
+        createdBy: user.id,
+        createdAt: Date.now(),
+      };
+
+      const expenseId = await createExpense(expenseData);
+
+      // Calculer le montant par participant
+      const amountPerParticipant =
+        parseFloat(amount) / selectedParticipants.length;
+
+      // Créer la dette en excluant le payeur de la liste des débiteurs
+      const deptData = {
+        expenseId,
+        groupId: group.id,
+        payerId: paidBy,
+        amount: parseFloat(amount),
+        debtors: selectedParticipants
+          .filter((participant) => participant.id !== paidBy) // Exclure le payeur
+          .map((participant) => ({
+            userId: participant.id,
+            amount: amountPerParticipant,
+          })),
+        createdAt: Date.now(),
+      };
+
+      await createDept(deptData);
+
+      Alert.alert('Succès', 'Dépense ajoutée avec succès', [
+        {
+          text: 'OK',
+          onPress: () => {
+            router.back();
+          },
+        },
+      ]);
+    } catch (err) {
+      console.error('Erreur lors de la création de la dépense:', err);
+      Alert.alert('Erreur', "Impossible d'ajouter la dépense");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const toggleParticipant = (index: number) => {
+    const updatedParticipants = [...participants];
+    updatedParticipants[index].selected = !updatedParticipants[index].selected;
+    setParticipants(updatedParticipants);
+  };
+
+  const handleBack = () => {
+    router.back();
+  };
+
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#2563EB" />
+        <Text style={styles.loadingText}>Chargement...</Text>
+      </View>
     );
-    setInvolvedParticipants(allParticipants);
-  };
+  }
 
-  const selectNoParticipants = () => {
-    setInvolvedParticipants(new Set());
-  };
+  if (error) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle" size={64} color="#EF4444" />
+          <Text style={styles.errorText}>{error}</Text>
+          <Pressable style={styles.retryButton} onPress={handleBack}>
+            <Text style={styles.retryButtonText}>Retour</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>Nouvelle Dépense</Text>
-
-      {error && <Text style={styles.error}>{error}</Text>}
-
-      <View style={styles.inputContainer}>
-        <Text style={styles.label}>Titre</Text>
-        <TextInput
-          style={styles.input}
-          value={title}
-          onChangeText={setTitle}
-          placeholder="Ex: Courses, Restaurant..."
-        />
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.header}>
+        <Pressable onPress={handleBack} style={styles.backButton}>
+          <Ionicons name="arrow-back" size={24} color="#2563EB" />
+        </Pressable>
+        <Text style={styles.headerTitle}>Nouvelle dépense</Text>
+        <Pressable
+          style={[styles.saveButton, isSaving && styles.disabledButton]}
+          onPress={handleSave}
+          disabled={isSaving}
+        >
+          <Text style={styles.saveButtonText}>
+            {isSaving ? 'Enregistrement...' : 'Enregistrer'}
+          </Text>
+        </Pressable>
       </View>
 
-      <View style={styles.inputContainer}>
-        <Text style={styles.label}>Montant (€)</Text>
-        <TextInput
-          style={styles.input}
-          value={amount}
-          onChangeText={setAmount}
-          placeholder="0.00"
-          keyboardType="decimal-pad"
-        />
-      </View>
-
-      <View style={styles.inputContainer}>
-        <Text style={styles.label}>Groupe</Text>
-        <View style={styles.pickerContainer}>
-          <Picker
-            selectedValue={selectedGroup}
-            onValueChange={(itemValue) => setSelectedGroup(itemValue)}
-          >
-            <Picker.Item label="Sélectionner un groupe" value="" />
-            {groups.map(group => (
-              <Picker.Item key={group.id} label={group.name} value={group.id} />
-            ))}
-          </Picker>
+      <ScrollView style={styles.container}>
+        <View style={styles.groupInfo}>
+          <Text style={styles.groupLabel}>Groupe</Text>
+          <Text style={styles.groupName}>{group?.name}</Text>
         </View>
-      </View>
 
-      {selectedGroup && (
-        <>
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Qui a payé ?</Text>
-            <View style={styles.pickerContainer}>
-              <Picker
-                selectedValue={paidBy}
-                onValueChange={(itemValue) => setPaidBy(itemValue)}
-              >
-                <Picker.Item label="Sélectionner qui a payé" value="" />
-                {participants.map(participant => (
-                  <Picker.Item 
-                    key={participant.id} 
-                    label={`${participant.name} ${amount ? `(+${amount}€)` : ''}`}
-                    value={participant.id} 
-                  />
-                ))}
-              </Picker>
-            </View>
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Titre de la dépense</Text>
+          <TextInput
+            style={styles.input}
+            value={title}
+            onChangeText={setTitle}
+            placeholder="Ex: Courses, Restaurant, etc."
+            placeholderTextColor="#9CA3AF"
+          />
+        </View>
+
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Montant</Text>
+          <View style={styles.amountInputContainer}>
+            <TextInput
+              style={styles.amountInput}
+              value={amount}
+              onChangeText={setAmount}
+              placeholder="0.00"
+              placeholderTextColor="#9CA3AF"
+              keyboardType="decimal-pad"
+            />
+            <Text style={styles.currencySymbol}>€</Text>
           </View>
+        </View>
 
-          <View style={styles.inputContainer}>
-            <View style={styles.payerParticipationRow}>
-              <Text style={styles.label}>Le payeur participe à la dépense ?</Text>
-              <Checkbox
-                value={payerParticipates}
-                onValueChange={setPayerParticipates}
-                color="#2563EB"
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Payé par</Text>
+          <View style={styles.dropdownContainer}>
+            <Pressable
+              style={styles.dropdown}
+              onPress={() => setShowPaidByDropdown(!showPaidByDropdown)}
+            >
+              <Text style={styles.dropdownText}>
+                {paidBy || 'Sélectionner'}
+              </Text>
+              <Ionicons
+                name={showPaidByDropdown ? 'chevron-up' : 'chevron-down'}
+                size={20}
+                color="#4B5563"
               />
-            </View>
+            </Pressable>
+
+            {showPaidByDropdown && (
+              <View style={styles.dropdownMenu}>
+                {participants.map((participant, index) => (
+                  <Pressable
+                    key={index}
+                    style={styles.dropdownItem}
+                    onPress={() => {
+                      setPaidBy(participant.id);
+                      setShowPaidByDropdown(false);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.dropdownItemText,
+                        paidBy === participant.id &&
+                          styles.dropdownItemSelected,
+                      ]}
+                    >
+                      {participant.name}
+                    </Text>
+                    {paidBy === participant.id && (
+                      <Ionicons name="checkmark" size={18} color="#2563EB" />
+                    )}
+                  </Pressable>
+                ))}
+              </View>
+            )}
           </View>
+        </View>
 
-          <View style={[styles.inputContainer, styles.involvedSection]}>
-            <Text style={styles.label}>Qui doit rembourser ?</Text>
-            <View style={styles.selectAllContainer}>
-              <Pressable 
-                style={styles.selectButton} 
-                onPress={selectAllParticipants}
-              >
-                <Text style={styles.selectButtonText}>Tout le monde</Text>
-              </Pressable>
-              <Pressable 
-                style={[styles.selectButton, styles.selectButtonSecondary]} 
-                onPress={selectNoParticipants}
-              >
-                <Text style={[styles.selectButtonText, styles.selectButtonTextSecondary]}>Personne</Text>
-              </Pressable>
-            </View>
-            {participants.map(participant => {
-              const isPayer = participant.id === paidBy;
-              const isInvolved = involvedParticipants.has(participant.id);
-              const amountPerPerson = getAmountPerPerson();
-              
-              // Calcul du montant net pour le payeur
-              const payerNetAmount = isPayer 
-                ? parseFloat(amount || '0') - (payerParticipates ? parseFloat(amountPerPerson) : 0)
-                : -parseFloat(amountPerPerson);
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Pour qui?</Text>
+          <Text style={styles.participantsHelp}>
+            Sélectionnez les personnes concernées par cette dépense
+          </Text>
 
-              return (
-                <View key={participant.id} style={styles.participantRow}>
-                  <View style={styles.checkboxContainer}>
-                    <Checkbox
-                      value={isPayer ? payerParticipates : isInvolved}
-                      onValueChange={() => {
-                        if (isPayer) {
-                          setPayerParticipates(!payerParticipates);
-                        } else {
-                          toggleInvolvedParticipant(participant.id);
-                        }
-                      }}
-                      disabled={false} // Le payeur peut maintenant choisir de ne pas participer
-                      color={isInvolved || (isPayer && payerParticipates) ? "#2563EB" : undefined}
-                    />
-                    <Text style={[
+          <View style={styles.participantsContainer}>
+            {participants.map((participant, index) => (
+              <Pressable
+                key={`participant-${index}`}
+                style={[
+                  styles.participantCard,
+                  participant.selected && styles.participantCardSelected,
+                ]}
+                onPress={() => toggleParticipant(index)}
+              >
+                <View style={styles.participantContent}>
+                  <Ionicons
+                    name={participant.selected ? 'checkbox' : 'square-outline'}
+                    size={22}
+                    color={participant.selected ? '#2563EB' : '#9CA3AF'}
+                    style={styles.participantCheckbox}
+                  />
+                  <Text
+                    style={[
                       styles.participantName,
-                      isPayer && styles.payerName
-                    ]}>
-                      {participant.name}{isPayer ? ' (payeur)' : ''}
-                    </Text>
-                  </View>
-                  {amount && (isInvolved || isPayer) && (
-                    <Text style={[
-                      styles.participantAmount,
-                      payerNetAmount >= 0 ? styles.positiveAmount : styles.negativeAmount
-                    ]}>
-                      {isPayer && !payerParticipates 
-                        ? `+${amount}€`
-                        : `${payerNetAmount >= 0 ? '+' : ''}${payerNetAmount.toFixed(2)}€`
-                      }
-                    </Text>
-                  )}
+                      participant.selected && styles.participantNameSelected,
+                    ]}
+                  >
+                    {participant.name}
+                  </Text>
                 </View>
-              );
-            })}
+              </Pressable>
+            ))}
           </View>
-        </>
-      )}
+        </View>
 
-      <Pressable
-        style={[styles.submitButton, !isValid && styles.submitButtonDisabled]}
-        onPress={handleSubmit}
-        disabled={!isValid || isLoading}
-      >
-        {isLoading ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <>
-            <Ionicons name="checkmark-circle" size={24} color="#fff" />
-            <Text style={styles.submitButtonText}>Créer la dépense</Text>
-          </>
-        )}
-      </Pressable>
-    </ScrollView>
+        <View style={styles.summary}>
+          <Text style={styles.summaryTitle}>Résumé</Text>
+          <View style={styles.summaryCard}>
+            <View style={styles.summaryRow}>
+              <View style={styles.summaryIconContainer}>
+                <Ionicons name="cash-outline" size={20} color="#2563EB" />
+              </View>
+              <Text style={styles.summaryLabel}>Montant total</Text>
+              <Text style={styles.summaryValue}>
+                {amount ? `${parseFloat(amount).toFixed(2)} €` : '0.00 €'}
+              </Text>
+            </View>
+
+            <View style={styles.divider} />
+
+            <View style={styles.summaryRow}>
+              <View style={styles.summaryIconContainer}>
+                <Ionicons name="person-outline" size={20} color="#2563EB" />
+              </View>
+              <Text style={styles.summaryLabel}>Payé par</Text>
+              <Text style={styles.summaryValue}>{paidBy || '-'}</Text>
+            </View>
+
+            <View style={styles.divider} />
+
+            <View style={styles.summaryRow}>
+              <View style={styles.summaryIconContainer}>
+                <Ionicons name="people-outline" size={20} color="#2563EB" />
+              </View>
+              <Text style={styles.summaryLabel}>Participants</Text>
+              <Text style={styles.summaryValue}>
+                {participants.filter((p) => p.selected).length}
+              </Text>
+            </View>
+
+            <View style={styles.divider} />
+
+            <View style={styles.summaryRow}>
+              <View style={styles.summaryIconContainer}>
+                <Ionicons name="calculator-outline" size={20} color="#2563EB" />
+              </View>
+              <Text style={styles.summaryLabel}>Montant par personne</Text>
+              <Text style={styles.summaryValue}>
+                {amount && participants.filter((p) => p.selected).length > 0
+                  ? `${(
+                      parseFloat(amount) /
+                      participants.filter((p) => p.selected).length
+                    ).toFixed(2)} €`
+                  : '0.00 €'}
+              </Text>
+            </View>
+          </View>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
   container: {
     flex: 1,
-    padding: 20,
-    backgroundColor: '#fff',
+    padding: 16,
   },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 20,
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
   },
-  inputContainer: {
+  backButton: {
+    padding: 8,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  saveButton: {
+    backgroundColor: '#2563EB',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  disabledButton: {
+    backgroundColor: '#93C5FD',
+  },
+  saveButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  groupInfo: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  groupLabel: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginBottom: 4,
+  },
+  groupName: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  inputGroup: {
     marginBottom: 20,
   },
   label: {
     fontSize: 16,
-    marginBottom: 8,
+    fontWeight: '500',
     color: '#374151',
+    marginBottom: 8,
   },
   input: {
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#D1D5DB',
     borderRadius: 8,
-    padding: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     fontSize: 16,
+    color: '#111827',
   },
-  pickerContainer: {
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  submitButton: {
-    backgroundColor: '#2563EB',
-    padding: 16,
-    borderRadius: 8,
+  amountInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 20,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 8,
+    paddingHorizontal: 16,
   },
-  submitButtonDisabled: {
-    backgroundColor: '#93C5FD',
-  },
-  submitButtonText: {
-    color: '#fff',
+  amountInput: {
+    flex: 1,
+    paddingVertical: 12,
     fontSize: 16,
-    fontWeight: 'bold',
-    marginLeft: 8,
+    color: '#111827',
   },
-  error: {
-    color: '#DC2626',
-    marginBottom: 20,
+  currencySymbol: {
+    fontSize: 16,
+    color: '#6B7280',
+    fontWeight: '500',
   },
-  loadingIndicator: {
-    padding: 10,
+  dropdownContainer: {
+    position: 'relative',
+    zIndex: 10,
   },
-  participantRow: {
+  dropdown: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginBottom: 4,
+  },
+  dropdownText: {
+    fontSize: 16,
+    color: '#111827',
+  },
+  dropdownMenu: {
+    position: 'absolute',
+    top: '100%',
+    left: 0,
+    right: 0,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 8,
+    paddingVertical: 4,
+    marginTop: 4,
+    maxHeight: 240,
+    overflow: 'scroll',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    zIndex: 20,
+  },
+  dropdownItem: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 12,
-    paddingHorizontal: 8,
+    paddingHorizontal: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
+    borderBottomColor: '#F3F4F6',
   },
-  selectedParticipant: {
-    backgroundColor: '#F3F4F6',
+  dropdownItemText: {
+    fontSize: 16,
+    color: '#111827',
   },
-  participantInfo: {
+  dropdownItemSelected: {
+    color: '#2563EB',
+    fontWeight: '600',
+  },
+  section: {
+    marginTop: 24,
+    marginBottom: 32,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111827',
+    marginBottom: 12,
+  },
+  participantsHelp: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginBottom: 12,
+  },
+  participantsContainer: {
+    marginTop: 8,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    padding: 8,
+  },
+  participantCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    padding: 12,
+    marginVertical: 6,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  participantCardSelected: {
+    backgroundColor: '#EBF5FF',
+    borderColor: '#BFDBFE',
+  },
+  participantContent: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  participantCheckbox: {
+    marginRight: 12,
   },
   participantName: {
-    marginLeft: 12,
     fontSize: 16,
-    color: '#374151',
+    color: '#4B5563',
+    flex: 1,
   },
-  participantAmount: {
-    fontSize: 16,
+  participantNameSelected: {
+    color: '#1E40AF',
     fontWeight: '500',
   },
-  positiveAmount: {
-    color: '#059669',
+  summary: {
+    marginTop: 24,
+    marginBottom: 32,
   },
-  negativeAmount: {
-    color: '#DC2626',
-  },
-  checkboxContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  involvedSection: {
-    marginTop: 8,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
-  },
-  payerName: {
+  summaryTitle: {
+    fontSize: 18,
     fontWeight: '600',
-    color: '#2563EB',
+    color: '#111827',
+    marginBottom: 12,
   },
-  payerParticipationRow: {
+  summaryCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  summaryRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: 8,
-    paddingHorizontal: 4,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 8,
   },
-  selectAllContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-    gap: 8,
+  summaryIconContainer: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#EBF5FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
   },
-  selectButton: {
+  summaryLabel: {
     flex: 1,
-    backgroundColor: '#2563EB',
-    padding: 8,
-    borderRadius: 6,
+    fontSize: 15,
+    color: '#4B5563',
+  },
+  summaryValue: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#F3F4F6',
+    marginVertical: 8,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  selectButtonSecondary: {
-    backgroundColor: '#F3F4F6',
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
+  loadingText: {
+    color: '#6B7280',
+    fontSize: 16,
+    marginTop: 16,
   },
-  selectButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '500',
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
   },
-  selectButtonTextSecondary: {
-    color: '#374151',
+  errorText: {
+    fontSize: 16,
+    color: '#EF4444',
+    textAlign: 'center',
+    marginTop: 16,
+    marginBottom: 24,
   },
-}); 
+  retryButton: {
+    backgroundColor: '#2563EB',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+});

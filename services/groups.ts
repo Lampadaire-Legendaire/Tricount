@@ -6,10 +6,13 @@ import {
   doc,
   updateDoc,
   deleteDoc,
+  query,
+  where,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createInvitation } from './invitations';
+import type { Group } from '../types/group';
 
 // Récupérer l'utilisateur actuel depuis AsyncStorage
 const getCurrentUser = async () => {
@@ -28,113 +31,115 @@ const getCurrentUser = async () => {
 // Créer un nouveau groupe
 export async function createGroup(
   name: string,
-  participants: {
+  invitedEditors: {
     id: string;
     name: string;
     email?: string;
-    pending?: boolean;
+  }[] = [], // Éditeurs invités
+  participants: {
+    name: string;
   }[]
 ): Promise<string> {
   try {
     console.log(
-      `Création du groupe "${name}" avec ${participants.length} participants`
+      `Création du groupe "${name}" avec ${
+        invitedEditors?.length || 0
+      } éditeurs invités et ${participants.length} participants`
     );
 
-    // Récupérer l'utilisateur actuel
-    const currentUserJson = await AsyncStorage.getItem('currentUser');
-    if (!currentUserJson) {
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
       throw new Error('Utilisateur non connecté');
     }
 
-    const currentUser = JSON.parse(currentUserJson);
-    console.log(`Utilisateur actuel: ${currentUser.name} (${currentUser.id})`);
+    // Vérifier que les noms des participants sont uniques
+    const participantNames = participants.map((p) => p.name.trim());
+    const uniqueNames = new Set(participantNames);
 
-    // Ajouter l'utilisateur actuel comme participant s'il n'est pas déjà inclus
-    const currentUserIsParticipant = participants.some(
-      (p) => p.id === currentUser.id
-    );
-
-    if (!currentUserIsParticipant) {
-      console.log(`Ajout de l'utilisateur actuel comme participant`);
-      participants.unshift({
-        id: currentUser.id,
-        name: currentUser.name,
-        email: currentUser.email,
-        pending: false,
-      });
+    if (uniqueNames.size !== participantNames.length) {
+      throw new Error('Les noms des participants doivent être uniques');
     }
 
-    // Séparer les participants confirmés et en attente
-    const confirmedParticipants = participants.filter((p) => !p.pending);
-    const pendingParticipants = participants.filter(
-      (p) => p.pending && p.email
+    // Filtrer les participants pour exclure ceux qui ont le même nom que les éditeurs invités
+    const invitedEditorNames = invitedEditors.map((editor) =>
+      editor.name.trim()
+    );
+    const filteredParticipants = participants.filter(
+      (participant) => !invitedEditorNames.includes(participant.name.trim())
     );
 
-    console.log(`Participants confirmés: ${confirmedParticipants.length}`);
-    console.log(`Participants en attente: ${pendingParticipants.length}`);
+    // Simplifier les participants - juste le nom
+    const simplifiedParticipants = filteredParticipants.map((participant) => ({
+      name: participant.name.trim(),
+    }));
 
-    // Créer la liste des emails invités pour les règles de sécurité
-    const invitedEmails = pendingParticipants
-      .filter((p) => p.email)
-      .map((p) => p.email);
+    // S'assurer que invitedEditors est un tableau d'objets avec la structure correcte
+    const formattedInvitedEditors = invitedEditors.map((editor) => ({
+      id: editor.id,
+      name: editor.name,
+      email: editor.email,
+    }));
 
-    console.log(`Emails invités: ${invitedEmails.join(', ')}`);
-
-    // Créer les données du groupe
+    // Créer le document du groupe avec la structure correcte
     const groupData = {
-      name,
-      participants: confirmedParticipants.map((p) => ({
-        id: p.id,
-        name: p.name,
-      })),
-      invitedUsers: invitedEmails,
-      createdBy: currentUser.id,
+      name: name.trim(), // Nom du groupe au niveau racine
+      editors: [
+        {
+          id: currentUser.id,
+          name: currentUser.name,
+          email: currentUser.email,
+        },
+      ],
+      invitedEditors: formattedInvitedEditors,
+      participants: simplifiedParticipants,
+      total: 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      total: 0,
+      createdBy: currentUser.id,
     };
 
-    // Ajouter le groupe à la collection
-    const groupsCollection = collection(db, 'groups');
-    const docRef = await addDoc(groupsCollection, groupData);
-    const groupId = docRef.id;
+    console.log(
+      'Structure du groupe à créer:',
+      JSON.stringify(groupData, null, 2)
+    );
 
-    console.log(`Groupe créé avec succès. ID: ${groupId}`);
+    // Ajouter le document à Firestore
+    const docRef = await addDoc(collection(db, 'groups'), groupData);
 
-    // Envoyer des invitations aux participants en attente
-    if (pendingParticipants.length > 0) {
-      console.log(
-        `Envoi des invitations aux ${pendingParticipants.length} participants en attente`
-      );
+    console.log(`Groupe créé avec succès. ID: ${docRef.id}`);
 
-      for (const participant of pendingParticipants) {
-        if (!participant.email) {
-          console.log(`Participant sans email, invitation ignorée`);
-          continue;
-        }
+    // Envoyer des invitations aux éditeurs invités
+    if (invitedEditors && invitedEditors.length > 0) {
+      console.log(`Envoi d'invitations à ${invitedEditors.length} éditeurs...`);
 
-        try {
-          console.log(`Envoi d'invitation à ${participant.email}`);
-          const invitationId = await createInvitation(
-            groupId,
-            name,
-            participant.email,
-            currentUser.id,
-            currentUser.name
-          );
-          console.log(
-            `Invitation envoyée avec succès à ${participant.email}. ID: ${invitationId}`
-          );
-        } catch (error) {
-          console.error(
-            `Erreur lors de l'envoi de l'invitation à ${participant.email}:`,
-            error
-          );
+      // Envoyer les invitations une par une
+      for (const editor of invitedEditors) {
+        if (editor.email) {
+          try {
+            console.log(`Envoi d'invitation à ${editor.email}...`);
+
+            // Utiliser la fonction createInvitation du service invitations
+            const invitationId = await createInvitation(
+              docRef.id,
+              name,
+              editor.email,
+              currentUser.id,
+              currentUser.name
+            );
+
+            console.log(`Invitation envoyée avec succès. ID: ${invitationId}`);
+          } catch (inviteError) {
+            console.error(
+              `Erreur lors de l'envoi de l'invitation à ${editor.email}:`,
+              inviteError
+            );
+            // Continuer avec les autres invitations même si une échoue
+          }
         }
       }
     }
 
-    return groupId;
+    return docRef.id;
   } catch (error) {
     console.error('Erreur lors de la création du groupe:', error);
     throw error;
@@ -142,43 +147,46 @@ export async function createGroup(
 }
 
 // Récupérer les groupes de l'utilisateur
-export async function getGroups() {
+export async function getGroups(): Promise<Group[]> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      console.error('Aucun utilisateur connecté');
-      return [];
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+      throw new Error('Utilisateur non connecté');
     }
 
-    console.log(`Récupération des groupes pour l'utilisateur ${user.id}`);
+    console.log(
+      `Récupération des groupes pour l'utilisateur ${currentUser.id}`
+    );
 
-    // Récupérer tous les groupes
-    const groupsCollection = collection(db, 'groups');
-    const snapshot = await getDocs(groupsCollection);
-
-    if (snapshot.empty) {
-      console.log('Aucun groupe trouvé');
-      return [];
-    }
-
-    // Filtrer les groupes où l'utilisateur est un participant actif
-    // (et non pas simplement invité)
-    const userGroups = snapshot.docs
-      .map((doc) => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          createdAt: data.createdAt || Date.now(),
-        };
+    // Récupérer les groupes où l'utilisateur est éditeur
+    const q = query(
+      collection(db, 'groups'),
+      where('editors', 'array-contains', {
+        id: currentUser.id,
+        name: currentUser.name,
+        email: currentUser.email,
       })
-      .filter((group) => {
-        // Vérifier si l'utilisateur est un participant actif du groupe
-        return group.participants.some((p) => p.id === user.id);
-      });
+    );
 
-    console.log(`${userGroups.length} groupes trouvés pour l'utilisateur`);
-    return userGroups;
+    const querySnapshot = await getDocs(q);
+    const groups: Group[] = [];
+
+    querySnapshot.forEach((doc) => {
+      const data = doc.data();
+      groups.push({
+        id: doc.id,
+        name: data.name,
+        editors: data.editors || [],
+        participants: data.participants || [],
+        total: data.total || 0,
+        createdAt: data.createdAt,
+        updatedAt: data.updatedAt,
+        createdBy: data.createdBy,
+      });
+    });
+
+    console.log(`${groups.length} groupes trouvés`);
+    return groups;
   } catch (error) {
     console.error('Erreur lors de la récupération des groupes:', error);
     throw error;
@@ -186,19 +194,36 @@ export async function getGroups() {
 }
 
 // Récupérer un groupe par son ID
-export async function getGroupById(groupId: string) {
+export async function getGroupById(groupId: string): Promise<Group | null> {
   try {
+    console.log(`Récupération du groupe ${groupId}`);
+
+    if (!groupId) {
+      console.error('ID de groupe non fourni');
+      return null;
+    }
+
     const docRef = doc(db, 'groups', groupId);
     const docSnap = await getDoc(docRef);
 
-    if (docSnap.exists()) {
-      return {
-        id: docSnap.id,
-        ...docSnap.data(),
-      };
-    } else {
-      throw new Error('Groupe non trouvé');
+    if (!docSnap.exists()) {
+      console.log(`Groupe ${groupId} non trouvé`);
+      return null;
     }
+
+    const data = docSnap.data();
+    console.log('Données du groupe récupérées:', JSON.stringify(data, null, 2));
+
+    return {
+      id: docSnap.id,
+      name: data.name || '',
+      editors: data.editors || [],
+      participants: data.participants || [],
+      total: data.total || 0,
+      createdAt: data.createdAt || Date.now(),
+      updatedAt: data.updatedAt || Date.now(),
+      createdBy: data.createdBy || '',
+    };
   } catch (error) {
     console.error('Erreur lors de la récupération du groupe:', error);
     throw error;
@@ -208,14 +233,47 @@ export async function getGroupById(groupId: string) {
 // Mettre à jour un groupe
 export async function updateGroup(
   groupId: string,
-  data: { name?: string; participants?: { id: string; name: string }[] }
-) {
+  updatedGroup: Partial<Group>
+): Promise<void> {
   try {
+    console.log(`Mise à jour du groupe ${groupId}`);
+
     const docRef = doc(db, 'groups', groupId);
+
+    // Récupérer le groupe actuel pour vérifier les autorisations
+    const currentDoc = await getDoc(docRef);
+    if (!currentDoc.exists()) {
+      throw new Error('Groupe non trouvé');
+    }
+
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+      throw new Error('Utilisateur non connecté');
+    }
+
+    const currentData = currentDoc.data();
+
+    // Vérifier que l'utilisateur est un éditeur du groupe
+    const isEditor = currentData.editors.some(
+      (editor) => editor.id === currentUser.id
+    );
+
+    if (!isEditor) {
+      throw new Error("Vous n'avez pas les droits pour modifier ce groupe");
+    }
+
+    // Si l'utilisateur essaie de modifier les éditeurs, vérifier qu'il est le créateur
+    if (updatedGroup.editors && currentData.createdBy !== currentUser.id) {
+      throw new Error('Seul le créateur du groupe peut modifier les éditeurs');
+    }
+
+    // Mettre à jour le document
     await updateDoc(docRef, {
-      ...data,
+      ...updatedGroup,
       updatedAt: Date.now(),
     });
+
+    console.log(`Groupe ${groupId} mis à jour avec succès`);
   } catch (error) {
     console.error('Erreur lors de la mise à jour du groupe:', error);
     throw error;
@@ -247,15 +305,18 @@ export async function deleteGroup(groupId: string) {
   }
 }
 
-// Ajouter un participant à un groupe
-export async function addParticipantToGroup(
+// Ajouter un éditeur à un groupe
+export async function addEditorToGroup(
   groupId: string,
-  participant: { id: string; name: string }
-) {
+  editor: {
+    id: string;
+    name: string;
+    email?: string;
+  }
+): Promise<void> {
   try {
-    console.log(`Ajout de ${participant.name} au groupe ${groupId}`);
+    console.log(`Ajout de l'éditeur ${editor.name} au groupe ${groupId}`);
 
-    // Récupérer le groupe
     const groupRef = doc(db, 'groups', groupId);
     const groupDoc = await getDoc(groupRef);
 
@@ -264,25 +325,33 @@ export async function addParticipantToGroup(
     }
 
     const groupData = groupDoc.data();
+    const editors = groupData.editors || [];
+    const invitedEditors = groupData.invitedEditors || [];
 
-    // Vérifier si le participant existe déjà
-    if (groupData.participants.some((p) => p.id === participant.id)) {
-      console.log('Le participant existe déjà dans le groupe');
-      return; // Le participant existe déjà
+    // Vérifier si l'utilisateur est déjà un éditeur
+    if (editors.some((e: any) => e.id === editor.id)) {
+      console.log(`L'utilisateur ${editor.name} est déjà un éditeur du groupe`);
+      return;
     }
 
-    // Ajouter le participant à la liste
-    const updatedParticipants = [...groupData.participants, participant];
+    // Ajouter l'utilisateur à la liste des éditeurs
+    editors.push(editor);
 
-    // Mettre à jour le groupe
+    // Retirer l'utilisateur de la liste des éditeurs invités
+    const updatedInvitedEditors = invitedEditors.filter(
+      (e: any) => e.id !== editor.id
+    );
+
+    // Mettre à jour le document du groupe
     await updateDoc(groupRef, {
-      participants: updatedParticipants,
+      editors,
+      invitedEditors: updatedInvitedEditors,
       updatedAt: Date.now(),
     });
 
-    console.log(`${participant.name} ajouté au groupe ${groupData.name}`);
+    console.log(`Éditeur ${editor.name} ajouté au groupe ${groupId}`);
   } catch (error) {
-    console.error("Erreur lors de l'ajout du participant:", error);
+    console.error("Erreur lors de l'ajout de l'éditeur au groupe:", error);
     throw error;
   }
 }
@@ -300,5 +369,37 @@ export async function updateGroupTotal(groupId: string, newTotal: number) {
     throw error;
   }
 }
+
+// Fonction pour retirer un éditeur d'un groupe
+export async function removeEditorFromGroup(groupId: string, editorId: string) {
+  try {
+    const groupRef = doc(db, 'groups', groupId);
+    const groupSnap = await getDoc(groupRef);
+
+    if (!groupSnap.exists()) {
+      throw new Error('Groupe non trouvé');
+    }
+
+    const groupData = groupSnap.data();
+
+    // Filtrer la liste des éditeurs pour retirer l'éditeur qui quitte
+    const updatedEditors = groupData.editors.filter(
+      (editor: { id: string }) => editor.id !== editorId
+    );
+
+    // Mettre à jour le document du groupe avec la nouvelle liste d'éditeurs
+    await updateDoc(groupRef, {
+      editors: updatedEditors,
+      updatedAt: Date.now(),
+    });
+
+    console.log(`Éditeur ${editorId} retiré du groupe ${groupId}`);
+  } catch (error) {
+    console.error("Erreur lors du retrait de l'éditeur:", error);
+    throw error;
+  }
+}
+
+export { getGroups as getUserGroups };
 
 export { getGroups as getUserGroups };

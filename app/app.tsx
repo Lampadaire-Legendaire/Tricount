@@ -8,6 +8,14 @@ export default function AppLayout() {
       <Tabs
         screenOptions={{
           tabBarActiveTintColor: '#2563EB',
+          headerStyle: {
+            height: 70,
+          },
+          headerTitleStyle: {
+            fontSize: 26,
+            fontWeight: '800',
+            color: '#111827',
+          },
         }}
       >
         <Tabs.Screen
@@ -16,6 +24,15 @@ export default function AppLayout() {
             title: 'Groupes',
             tabBarIcon: ({ color, size }) => (
               <Ionicons name="people" size={size} color={color} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="expenses"
+          options={{
+            title: 'Dépenses',
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="cash-outline" size={size} color={color} />
             ),
           }}
         />

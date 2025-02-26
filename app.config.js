@@ -7,19 +7,32 @@ export default {
   orientation: 'portrait',
   userInterfaceStyle: 'light',
   splash: {
+    image: './assets/splashscreen_logo.png',
+    resizeMode: 'contain',
     backgroundColor: '#ffffff',
   },
   assetBundlePatterns: ['**/*'],
   ios: {
     supportsTablet: true,
+    bundleIdentifier: 'com.paaztek.tricount',
   },
   android: {
+    package: 'com.paaztek.tricount',
     adaptiveIcon: {
       backgroundColor: '#ffffff',
     },
   },
   web: {},
-  plugins: ['expo-router'],
+  plugins: [
+    'expo-router',
+    [
+      'expo-splash-screen',
+      {
+        backgroundColor: '#ffffff',
+        //image: './assets/splash-icon.png',
+      },
+    ],
+  ],
   scheme: 'tricount',
   newArchEnabled: true,
   extra: {
@@ -34,4 +47,5 @@ export default {
       process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
     firebaseAppId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
   },
+  jsEngine: 'hermes',
 };

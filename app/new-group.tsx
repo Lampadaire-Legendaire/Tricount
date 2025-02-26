@@ -1,162 +1,104 @@
-import React, { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   View,
   Text,
   TextInput,
   StyleSheet,
   Pressable,
-  FlatList,
-  Alert,
+  ScrollView,
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
+  SafeAreaView,
+  Alert,
 } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '../lib/auth-context';
+import { createGroup } from '../services/groups';
 import { searchUserByEmail } from '../services/users';
-import { collection, addDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { useAuth } from '../lib/auth-context';
 
 export default function NewGroupScreen() {
-  console.log('Page de création de groupe chargée');
-
+  const { user } = useAuth();
   const [groupName, setGroupName] = useState('');
   const [participants, setParticipants] = useState<
-    {
-      id: string;
-      name: string;
-      email?: string;
-      isExistingUser?: boolean;
-      isInvited?: boolean;
-      pending?: boolean;
-    }[]
+    { id: string; name: string }[]
   >([]);
-  const [newParticipantEmail, setNewParticipantEmail] = useState('');
+  const [newParticipantName, setNewParticipantName] = useState('');
+  const [editors, setEditors] = useState<
+    { id: string; name: string; email: string }[]
+  >(user ? [{ id: user.id, name: user.name, email: user.email }] : []);
+  const [newEditorEmail, setNewEditorEmail] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const { user } = useAuth();
+  const [virtualParticipants, setVirtualParticipants] = useState<
+    { name: string }[]
+  >([]);
 
-  // Ajouter automatiquement l'utilisateur actuel comme participant
-  useEffect(() => {
-    if (user) {
-      // Vérifier si l'utilisateur est déjà dans la liste
-      if (!participants.some((p) => p.id === user.id)) {
-        setParticipants([
-          {
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            isExistingUser: true,
-          },
-        ]);
-      }
+  const handleAddParticipant = () => {
+    if (!newParticipantName.trim()) {
+      Alert.alert('Erreur', 'Veuillez entrer un nom de participant');
+      return;
     }
-  }, [user]);
+
+    // Vérifier si le nom existe déjà
+    const nameExists = [...participants, ...virtualParticipants].some(
+      (p) =>
+        p.name.trim().toLowerCase() === newParticipantName.trim().toLowerCase()
+    );
+
+    if (nameExists) {
+      Alert.alert('Erreur', 'Ce nom de participant existe déjà');
+      return;
+    }
+
+    // Ajouter le participant à la liste des participants virtuels
+    setVirtualParticipants([
+      ...virtualParticipants,
+      { name: newParticipantName.trim() },
+    ]);
+    setNewParticipantName('');
+  };
+
+  const handleRemoveParticipant = (index: number) => {
+    const newVirtualParticipants = [...virtualParticipants];
+    newVirtualParticipants.splice(index, 1);
+    setVirtualParticipants(newVirtualParticipants);
+  };
 
   const handleSearchUser = async () => {
-    if (!newParticipantEmail || !newParticipantEmail.includes('@')) {
-      Alert.alert('Erreur', 'Veuillez entrer une adresse email valide');
+    if (!newEditorEmail.trim()) {
+      Alert.alert('Erreur', "Veuillez entrer l'email de l'éditeur");
       return;
     }
 
     try {
       setIsSearching(true);
-      console.log(
-        `Recherche de l'utilisateur avec l'email: ${newParticipantEmail}`
-      );
+      console.log(`Recherche de l'utilisateur avec l'email: ${newEditorEmail}`);
 
-      // Vérifier si l'utilisateur existe déjà dans la liste des participants
-      const existingParticipant = participants.find(
-        (p) => p.email === newParticipantEmail
-      );
+      const foundUser = await searchUserByEmail(newEditorEmail.trim());
 
-      if (existingParticipant) {
-        Alert.alert(
-          'Participant déjà ajouté',
-          'Cet utilisateur est déjà dans la liste des participants'
-        );
+      if (!foundUser) {
+        Alert.alert('Erreur', 'Aucun utilisateur trouvé avec cet email');
         return;
       }
 
-      // Rechercher l'utilisateur dans la base de données
-      const foundUser = await searchUserByEmail(newParticipantEmail);
-
-      if (foundUser) {
-        console.log(`Utilisateur trouvé: ${foundUser.name} (${foundUser.id})`);
-
-        // Ajouter l'utilisateur existant à la liste des participants
-        setParticipants([
-          ...participants,
-          {
-            id: foundUser.id,
-            name: foundUser.name,
-            email: foundUser.email,
-            isExistingUser: true, // Marquer comme utilisateur existant
-          },
-        ]);
-      } else {
-        // Utilisateur non trouvé, créer un participant temporaire
-        const tempId = `temp-${Date.now()}`;
-        const tempParticipant = {
-          id: tempId,
-          name: `Invité (${newParticipantEmail})`,
-          email: newParticipantEmail,
-          pending: true,
-          isInvited: true, // Marquer clairement comme invité
-        };
-
-        setParticipants([...participants, tempParticipant]);
-        console.log(
-          `Utilisateur non trouvé, ajout d'un participant temporaire: ${tempParticipant.name}`
-        );
-
-        // Créer immédiatement une invitation temporaire
-        try {
-          // Générer un ID de groupe temporaire si nécessaire
-          const tempGroupId = `temp-group-${Date.now()}`;
-          const tempGroupName = groupName || 'Nouveau groupe';
-
-          console.log(
-            `Création d'une invitation temporaire pour ${newParticipantEmail}`
-          );
-
-          // Créer directement l'invitation dans Firestore
-          const invitationData = {
-            groupId: tempGroupId,
-            groupName: tempGroupName,
-            recipientEmail: newParticipantEmail,
-            senderId: user.id,
-            senderName: user.name,
-            status: 'pending',
-            createdAt: Date.now(),
-            isTemporary: true, // Marquer comme temporaire
-          };
-
-          console.log(
-            `Données de l'invitation: ${JSON.stringify(invitationData)}`
-          );
-
-          // Ajouter l'invitation à Firestore
-          const invitationsCollection = collection(db, 'invitations');
-          const invitationRef = await addDoc(
-            invitationsCollection,
-            invitationData
-          );
-
-          console.log(
-            `Invitation temporaire créée avec succès. ID: ${invitationRef.id}`
-          );
-        } catch (error) {
-          console.error(
-            `Erreur lors de la création de l'invitation temporaire:`,
-            error
-          );
-          // Continuer malgré l'erreur
-        }
+      // Vérifier si l'utilisateur est déjà dans la liste des éditeurs
+      const userExists = editors.some((editor) => editor.id === foundUser.id);
+      if (userExists) {
+        Alert.alert('Erreur', 'Cet utilisateur est déjà un éditeur du groupe');
+        return;
       }
 
-      setNewParticipantEmail('');
+      // Ajouter l'utilisateur à la liste des éditeurs
+      setEditors([
+        ...editors,
+        {
+          id: foundUser.id,
+          name: foundUser.name,
+          email: foundUser.email,
+        },
+      ]);
+
+      setNewEditorEmail('');
     } catch (error) {
       console.error("Erreur lors de la recherche de l'utilisateur:", error);
       Alert.alert('Erreur', "Impossible de rechercher l'utilisateur");
@@ -165,17 +107,16 @@ export default function NewGroupScreen() {
     }
   };
 
-  const handleRemoveParticipant = (id: string) => {
-    // Ne pas permettre la suppression de l'utilisateur actuel
-    if (user && id === user.id) {
-      Alert.alert(
-        'Action non autorisée',
-        'Vous ne pouvez pas vous retirer du groupe'
-      );
+  const handleRemoveEditor = (index: number) => {
+    // Ne pas permettre de supprimer l'utilisateur actuel (créateur)
+    if (editors[index].id === user?.id) {
+      Alert.alert('Erreur', 'Vous ne pouvez pas vous retirer du groupe');
       return;
     }
 
-    setParticipants(participants.filter((p) => p.id !== id));
+    const newEditors = [...editors];
+    newEditors.splice(index, 1);
+    setEditors(newEditors);
   };
 
   const handleCreateGroup = async () => {
@@ -184,141 +125,51 @@ export default function NewGroupScreen() {
       return;
     }
 
-    if (participants.length === 0) {
+    // Filtrer les participants vides
+    const validParticipants = participants.filter((p) => p.name.trim() !== '');
+
+    // Ajouter les participants virtuels
+    const allParticipants = [...validParticipants, ...virtualParticipants];
+
+    if (allParticipants.length === 0) {
       Alert.alert('Erreur', 'Veuillez ajouter au moins un participant');
+      return;
+    }
+
+    // Vérifier que les noms des participants sont uniques
+    const participantNames = allParticipants.map((p) => p.name.trim());
+    const uniqueNames = new Set(participantNames);
+
+    if (uniqueNames.size !== participantNames.length) {
+      Alert.alert('Erreur', 'Les noms des participants doivent être uniques');
       return;
     }
 
     try {
       setIsCreating(true);
-      console.log('Création du groupe:', groupName);
-      console.log('Participants bruts:', JSON.stringify(participants));
+      console.log('Début de la création du groupe...');
+      console.log(`Nom du groupe: ${groupName}`);
+      console.log(`Nombre de participants: ${allParticipants.length}`);
 
-      // Séparer EXPLICITEMENT les participants confirmés et en attente
-      // Utiliser le flag isInvited pour identifier les invités
-      const pendingParticipants = participants.filter(
-        (p) => p.isInvited === true
+      // Filtrer les éditeurs pour ne garder que ceux qui sont invités
+      // (l'utilisateur actuel sera ajouté automatiquement comme éditeur dans createGroup)
+      const invitedEditors = editors.filter((editor) => editor.id !== user?.id);
+      console.log(`Nombre d'éditeurs invités: ${invitedEditors.length}`);
+
+      // Créer le groupe
+      const groupId = await createGroup(
+        groupName,
+        invitedEditors,
+        allParticipants
       );
-
-      // IMPORTANT: Filtrer les participants qui ne sont PAS l'utilisateur actuel
-      // Tous les autres utilisateurs doivent recevoir une invitation
-      const confirmedParticipants = participants.filter(
-        (p) => p.id === user.id
-      );
-
-      // Tous les autres participants (existants mais pas l'utilisateur actuel) doivent recevoir une invitation
-      const existingUsersToInvite = participants.filter(
-        (p) => p.isExistingUser === true && p.id !== user.id
-      );
-
-      console.log(
-        'Participants confirmés (seulement utilisateur actuel):',
-        JSON.stringify(confirmedParticipants)
-      );
-      console.log(
-        'Participants en attente (non-existants):',
-        JSON.stringify(pendingParticipants)
-      );
-      console.log(
-        'Utilisateurs existants à inviter:',
-        JSON.stringify(existingUsersToInvite)
-      );
-
-      // Extraire les emails des participants en attente
-      const invitedEmails = [
-        ...pendingParticipants.map((p) => p.email),
-        ...existingUsersToInvite.map((p) => p.email),
-      ].filter(Boolean);
-
-      console.log('Emails invités:', invitedEmails);
-
-      // S'assurer que seuls les participants confirmés sont dans le tableau participants
-      const groupData = {
-        name: groupName,
-        participants: confirmedParticipants.map((p) => ({
-          id: p.id,
-          name: p.name,
-        })),
-        invitedUsers: invitedEmails, // Mettre les emails des utilisateurs invités ici
-        createdBy: user.id,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        total: 0,
-      };
-
-      console.log('Données du groupe FINALES:', JSON.stringify(groupData));
-
-      // Ajouter le groupe à la collection
-      const groupsCollection = collection(db, 'groups');
-      const docRef = await addDoc(groupsCollection, groupData);
-      const groupId = docRef.id;
 
       console.log(`Groupe créé avec succès. ID: ${groupId}`);
 
-      // Envoyer des invitations à TOUS les participants sauf l'utilisateur actuel
-      const allParticipantsToInvite = [
-        ...pendingParticipants,
-        ...existingUsersToInvite,
-      ];
-
-      if (allParticipantsToInvite.length > 0) {
-        console.log(
-          `=== DÉBUT ENVOI DES INVITATIONS (${allParticipantsToInvite.length} participants) ===`
-        );
-
-        for (const participant of allParticipantsToInvite) {
-          if (!participant.email) {
-            console.log('Participant sans email, invitation ignorée');
-            continue;
-          }
-
-          try {
-            console.log(
-              `Tentative d'envoi d'invitation à ${participant.email}`
-            );
-
-            // Créer directement l'invitation dans Firestore
-            const invitationData = {
-              groupId,
-              groupName,
-              recipientEmail: participant.email,
-              recipientId: participant.isExistingUser ? participant.id : null,
-              senderId: user.id,
-              senderName: user.name,
-              status: 'pending',
-              createdAt: Date.now(),
-            };
-
-            console.log(
-              `Données d'invitation: ${JSON.stringify(invitationData)}`
-            );
-
-            // Ajouter directement à Firestore
-            const invitationsCollection = collection(db, 'invitations');
-            const invitationRef = await addDoc(
-              invitationsCollection,
-              invitationData
-            );
-
-            console.log(
-              `Invitation créée avec succès. ID: ${invitationRef.id}`
-            );
-          } catch (error) {
-            console.error(
-              `Erreur lors de l'envoi de l'invitation à ${participant.email}:`,
-              error
-            );
-          }
-        }
-
-        console.log('=== FIN ENVOI DES INVITATIONS ===');
-      }
-
+      // Rediriger vers l'écran d'accueil
       Alert.alert('Succès', 'Le groupe a été créé avec succès', [
         {
           text: 'OK',
           onPress: () => {
-            // Rediriger vers l'écran d'accueil avec un paramètre pour rafraîchir la liste
             router.replace({
               pathname: '/(tabs)',
               params: { refresh: Date.now().toString() },
@@ -334,241 +185,325 @@ export default function NewGroupScreen() {
     }
   };
 
+  const handleBack = () => {
+    router.back();
+  };
+
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={100}
-    >
+    <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color="#374151" />
+        <Pressable onPress={handleBack} style={styles.backButton}>
+          <Ionicons name="arrow-back" size={24} color="#111827" />
         </Pressable>
-        <Text style={styles.title}>Nouveau Groupe</Text>
-        <View style={styles.placeholder} />
+        <Text style={styles.headerTitle}>Nouveau Groupe</Text>
+        <View style={{ width: 24 }} />
       </View>
 
-      <View style={styles.form}>
-        <View style={styles.inputContainer}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.contentContainer}
+      >
+        <View style={styles.section}>
           <Text style={styles.label}>Nom du groupe</Text>
           <TextInput
             style={styles.input}
             placeholder="Ex: Vacances à la montagne"
             value={groupName}
             onChangeText={setGroupName}
-            autoFocus
+            placeholderTextColor="#9CA3AF"
           />
         </View>
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Ajouter des participants par email</Text>
-          <View style={styles.participantInputContainer}>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Éditeurs</Text>
+          <Text style={styles.sectionDescription}>
+            Entrez ici l'adresse mail des utilisateurs à ajouter en temps
+            qu'editeurs
+          </Text>
+
+          <Text style={styles.label}>Ajouter des éditeurs par email</Text>
+          <View style={styles.searchContainer}>
             <TextInput
-              style={styles.participantInput}
-              placeholder="Email du participant"
-              value={newParticipantEmail}
-              onChangeText={setNewParticipantEmail}
+              style={styles.searchInput}
+              placeholder="Email de l'éditeur"
+              value={newEditorEmail}
+              onChangeText={setNewEditorEmail}
+              placeholderTextColor="#9CA3AF"
               keyboardType="email-address"
               autoCapitalize="none"
-              onSubmitEditing={handleSearchUser}
             />
             <Pressable
+              style={styles.searchButton}
               onPress={handleSearchUser}
-              style={styles.addButton}
-              disabled={isSearching}
+              disabled={isSearching || !newEditorEmail.trim()}
             >
               {isSearching ? (
-                <ActivityIndicator size="small" color="#fff" />
+                <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
-                <Ionicons name="search" size={24} color="#fff" />
+                <Ionicons name="search" size={24} color="#FFFFFF" />
               )}
             </Pressable>
           </View>
+
+          <Text style={styles.listTitle}>Éditeurs ({editors.length})</Text>
+          {editors.map((editor, index) => (
+            <View key={editor.id} style={styles.editorItem}>
+              <View style={styles.editorInfo}>
+                <Ionicons name="person-circle" size={36} color="#4B5563" />
+                <View style={styles.editorDetails}>
+                  <Text style={styles.editorName}>{editor.name}</Text>
+                  <Text style={styles.editorEmail}>{editor.email}</Text>
+                </View>
+              </View>
+              {editor.id === user?.id ? (
+                <View style={styles.creatorBadge}>
+                  <Text style={styles.creatorBadgeText}>Créateur</Text>
+                </View>
+              ) : (
+                <Pressable
+                  onPress={() => handleRemoveEditor(index)}
+                  style={styles.removeButton}
+                >
+                  <Ionicons name="close-circle" size={24} color="#EF4444" />
+                </Pressable>
+              )}
+            </View>
+          ))}
         </View>
 
-        <Text style={styles.participantsTitle}>
-          Participants ({participants.length})
-        </Text>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Participants</Text>
+          <Text style={styles.sectionDescription}>
+            Entrez ici le nom des personnes qui participeront au partage des
+            dépenses
+          </Text>
 
-        <FlatList
-          data={participants}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <View style={styles.participantItem}>
-              <View>
-                <Text style={styles.participantName}>{item.name}</Text>
-                {item.email && (
-                  <Text style={styles.participantEmail}>{item.email}</Text>
-                )}
-                {item.pending && (
-                  <Text style={styles.pendingLabel}>
-                    En attente d'inscription
-                  </Text>
-                )}
-              </View>
-              <Pressable
-                onPress={() => handleRemoveParticipant(item.id)}
-                style={styles.removeButton}
-                disabled={user && item.id === user.id}
-              >
-                <Ionicons
-                  name="close-circle"
-                  size={24}
-                  color={user && item.id === user.id ? '#D1D5DB' : '#EF4444'}
-                />
-              </Pressable>
-            </View>
+          <View style={styles.searchContainer}>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Nom du participant"
+              value={newParticipantName}
+              onChangeText={setNewParticipantName}
+              placeholderTextColor="#9CA3AF"
+            />
+            <Pressable
+              style={styles.searchButton}
+              onPress={handleAddParticipant}
+              disabled={!newParticipantName.trim()}
+            >
+              <Ionicons name="add" size={24} color="#FFFFFF" />
+            </Pressable>
+          </View>
+
+          {virtualParticipants.length > 0 && (
+            <>
+              <Text style={styles.listTitle}>
+                Participants ({virtualParticipants.length})
+              </Text>
+              {virtualParticipants.map((participant, index) => (
+                <View key={index} style={styles.participantItem}>
+                  <Text style={styles.participantName}>{participant.name}</Text>
+                  <Pressable
+                    onPress={() => handleRemoveParticipant(index)}
+                    style={styles.removeButton}
+                  >
+                    <Ionicons name="close-circle" size={24} color="#EF4444" />
+                  </Pressable>
+                </View>
+              ))}
+            </>
           )}
-          style={styles.participantList}
-        />
+        </View>
 
         <Pressable
           style={[
             styles.createButton,
-            (!groupName.trim() || participants.length < 2) &&
+            (!groupName.trim() || virtualParticipants.length === 0) &&
               styles.disabledButton,
           ]}
           onPress={handleCreateGroup}
-          disabled={!groupName.trim() || participants.length < 2 || isCreating}
+          disabled={
+            isCreating || !groupName.trim() || virtualParticipants.length === 0
+          }
         >
           {isCreating ? (
-            <ActivityIndicator color="#fff" size="small" />
+            <ActivityIndicator size="small" color="#FFFFFF" />
           ) : (
             <>
-              <Ionicons name="checkmark-circle" size={24} color="#fff" />
+              <Ionicons name="checkmark-circle" size={24} color="#FFFFFF" />
               <Text style={styles.createButtonText}>Créer le groupe</Text>
             </>
           )}
         </Pressable>
-      </View>
-    </KeyboardAvoidingView>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: '#F9FAFB',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
+    backgroundColor: '#FFFFFF',
   },
   backButton: {
     padding: 8,
   },
-  title: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  placeholder: {
-    width: 40,
-  },
-  form: {
-    padding: 16,
-    flex: 1,
-  },
-  inputContainer: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 16,
-    marginBottom: 8,
-    color: '#374151',
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-  },
-  participantInputContainer: {
-    flexDirection: 'row',
-    marginBottom: 16,
-  },
-  participantInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    marginRight: 8,
-  },
-  addButton: {
-    backgroundColor: '#2563EB',
-    width: 48,
-    height: 48,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  participantsTitle: {
+  headerTitle: {
     fontSize: 18,
     fontWeight: '600',
     color: '#111827',
-    marginBottom: 12,
   },
-  participantList: {
+  container: {
     flex: 1,
+  },
+  contentContainer: {
+    padding: 16,
+  },
+  section: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111827',
+    marginBottom: 8,
+  },
+  sectionDescription: {
+    fontSize: 14,
+    color: '#6B7280',
     marginBottom: 16,
   },
-  participantItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  participantName: {
+  label: {
     fontSize: 16,
-    color: '#374151',
     fontWeight: '500',
+    color: '#374151',
+    marginBottom: 8,
   },
-  participantEmail: {
+  input: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#111827',
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    marginBottom: 16,
+  },
+  searchInput: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderTopLeftRadius: 8,
+    borderBottomLeftRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#111827',
+  },
+  searchButton: {
+    backgroundColor: '#2563EB',
+    borderTopRightRadius: 8,
+    borderBottomRightRadius: 8,
+    paddingHorizontal: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  listTitle: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  editorItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+  },
+  editorInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  editorDetails: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  editorName: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#111827',
+  },
+  editorEmail: {
     fontSize: 14,
     color: '#6B7280',
   },
-  pendingLabel: {
+  creatorBadge: {
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 4,
+  },
+  creatorBadgeText: {
     fontSize: 12,
-    color: '#F59E0B',
-    fontStyle: 'italic',
+    color: '#D97706',
+    fontWeight: '500',
+  },
+  participantItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+  },
+  participantName: {
+    fontSize: 16,
+    color: '#111827',
   },
   removeButton: {
     padding: 4,
   },
-  disabledButton: {
-    backgroundColor: '#93C5FD',
-    opacity: 0.7,
-  },
   createButton: {
-    backgroundColor: '#2563EB',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 24,
-    borderRadius: 30,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
+    backgroundColor: '#2563EB',
+    borderRadius: 8,
+    paddingVertical: 16,
     marginTop: 16,
-    marginBottom: 20,
+    marginBottom: 32,
+  },
+  disabledButton: {
+    backgroundColor: '#93C5FD',
   },
   createButtonText: {
-    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+    color: '#FFFFFF',
     marginLeft: 8,
   },
 });

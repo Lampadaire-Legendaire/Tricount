@@ -1,45 +1,35 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  FlatList,
-  ActivityIndicator,
   Pressable,
-  Alert,
+  ActivityIndicator,
+  SafeAreaView,
+  ScrollView,
 } from 'react-native';
-import Modal from 'react-native-modal';
-import { Picker } from '@react-native-picker/picker';
 import { Ionicons } from '@expo/vector-icons';
-import { getGroups } from '../../services/groups';
-import {
-  calculateBalances,
-  calculatePaymentSuggestions,
-} from '../../services/balances';
-import { createPayment } from '../../services/payments';
 import { useAuth } from '../../lib/auth-context';
+import { getGroups } from '../../services/groups';
+import { getDeptsByGroupId } from '../../services/depts';
 import type { Group } from '../../types/group';
-import type { Balance } from '../../services/balances';
-import type { PaymentSuggestion } from '../../types/payment';
+
+interface ParticipantBalance {
+  name: string;
+  totalPaid: number;
+  totalOwed: number;
+  netBalance: number;
+}
 
 export default function BalanceScreen() {
   const [groups, setGroups] = useState<Group[]>([]);
-  const [selectedGroup, setSelectedGroup] = useState<string>('');
-  const [balances, setBalances] = useState<Balance[]>([]);
+  const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
+  const [participantBalances, setParticipantBalances] = useState<
+    ParticipantBalance[]
+  >([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [showGroupSelector, setShowGroupSelector] = useState(false);
   const { user } = useAuth();
-
-  // Utiliser useMemo pour calculer les suggestions à partir des balances
-  const suggestions = useMemo(() => {
-    return calculatePaymentSuggestions(balances);
-  }, [balances]);
-
-  // Calculer le solde total
-  const totalBalance = useMemo(() => {
-    return balances.reduce((sum, balance) => sum + balance.amount, 0);
-  }, [balances]);
 
   useEffect(() => {
     if (user) {
@@ -47,244 +37,127 @@ export default function BalanceScreen() {
     }
   }, [user]);
 
-  useEffect(() => {
-    if (user) {
-      loadBalances();
-    }
-  }, [selectedGroup, user]);
-
   const loadGroups = async () => {
     try {
       const fetchedGroups = await getGroups();
       setGroups(fetchedGroups);
-    } catch (err) {
-      console.error('Erreur lors du chargement des groupes:', err);
-      setError('Erreur lors du chargement des groupes');
-    }
-  };
-
-  const loadBalances = async () => {
-    try {
-      setIsLoading(true);
-      const fetchedBalances = await calculateBalances(
-        selectedGroup || undefined
-      );
-      setBalances(fetchedBalances);
-    } catch (err) {
-      console.error('Erreur lors du calcul des soldes:', err);
-      setError('Erreur lors du calcul des soldes');
+      if (fetchedGroups.length > 0) {
+        setSelectedGroup(fetchedGroups[0]);
+      }
+    } catch (error) {
+      console.error('Erreur lors du chargement des groupes:', error);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handlePaymentConfirmation = async (suggestion: PaymentSuggestion) => {
-    Alert.alert(
-      'Confirmer le remboursement',
-      `Confirmez-vous que ${
-        suggestion.fromName
-      } a remboursé ${suggestion.amount.toFixed(2)}€ à ${suggestion.toName} ?`,
-      [
-        {
-          text: 'Annuler',
-          style: 'cancel',
-        },
-        {
-          text: 'Confirmer',
-          onPress: async () => {
-            try {
-              setIsLoading(true);
-              await createPayment(
-                suggestion.from,
-                suggestion.to,
-                suggestion.amount,
-                suggestion.groupId
-              );
-              // Recharger les soldes
-              await loadBalances();
-              Alert.alert('Succès', 'Le remboursement a été enregistré');
-            } catch (err) {
-              Alert.alert(
-                'Erreur',
-                "Une erreur est survenue lors de l'enregistrement du remboursement"
-              );
-            } finally {
-              setIsLoading(false);
-            }
-          },
-        },
-      ]
-    );
+  const calculateBalances = async (group: Group) => {
+    try {
+      setIsLoading(true);
+      const depts = await getDeptsByGroupId(group.id);
+
+      // Initialiser les soldes pour chaque participant
+      const balances: { [key: string]: ParticipantBalance } = {};
+      group.participants.forEach((participant) => {
+        balances[participant.name] = {
+          name: participant.name,
+          totalPaid: 0,
+          totalOwed: 0,
+          netBalance: 0,
+        };
+      });
+
+      // Calculer les totaux payés et dus
+      depts.forEach((dept) => {
+        // Ajouter le montant total payé
+        const payer = group.participants.find((p) => p.name === dept.payerId);
+        if (payer && balances[payer.name]) {
+          balances[payer.name].totalPaid += dept.amount;
+        }
+
+        // Ajouter les montants dus
+        dept.debtors.forEach((debtor) => {
+          if (balances[debtor.userId]) {
+            balances[debtor.userId].totalOwed += debtor.amount;
+          }
+        });
+      });
+
+      // Calculer le solde net pour chaque participant
+      Object.values(balances).forEach((balance) => {
+        balance.netBalance = balance.totalPaid - balance.totalOwed;
+      });
+
+      setParticipantBalances(Object.values(balances));
+    } catch (error) {
+      console.error('Erreur lors du calcul des soldes:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleCloseModal = () => {
-    setShowSuggestions(false);
-  };
+  useEffect(() => {
+    if (selectedGroup) {
+      calculateBalances(selectedGroup);
+    }
+  }, [selectedGroup]);
 
-  if (isLoading) {
-    return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#2563EB" />
+  const renderParticipantBalance = (balance: ParticipantBalance) => (
+    <View style={styles.balanceCard} key={balance.name}>
+      <View style={styles.balanceHeader}>
+        <Ionicons name="person-circle" size={40} color="#2563EB" />
+        <Text style={styles.participantName}>{balance.name}</Text>
       </View>
-    );
-  }
-
-  if (error) {
-    return (
-      <View style={styles.centerContainer}>
-        <Text style={styles.error}>{error}</Text>
-        <Pressable onPress={loadBalances} style={styles.retryButton}>
-          <Text style={styles.retryButtonText}>Réessayer</Text>
-        </Pressable>
+      <View style={styles.balanceDetails}>
+        <View style={styles.balanceRow}>
+          <Text style={styles.balanceLabel}>Total payé</Text>
+          <Text style={styles.balanceAmount}>
+            {balance.totalPaid.toFixed(2)}€
+          </Text>
+        </View>
+        <View style={styles.balanceRow}>
+          <Text style={styles.balanceLabel}>Total dû</Text>
+          <Text style={styles.balanceAmount}>
+            {balance.totalOwed.toFixed(2)}€
+          </Text>
+        </View>
+        <View style={[styles.balanceRow, styles.netBalanceRow]}>
+          <Text style={styles.balanceLabel}>Solde net</Text>
+          <Text
+            style={[
+              styles.balanceAmount,
+              balance.netBalance >= 0
+                ? styles.positiveBalance
+                : styles.negativeBalance,
+            ]}
+          >
+            {balance.netBalance.toFixed(2)}€
+          </Text>
+        </View>
       </View>
-    );
-  }
-
-  // Si l'utilisateur n'est pas connecté, afficher un message
-  if (!user) {
-    return (
-      <View style={styles.centerContainer}>
-        <Text style={styles.emptyText}>
-          Connectez-vous pour voir vos équilibres
-        </Text>
-      </View>
-    );
-  }
+    </View>
+  );
 
   return (
-    <View style={styles.container}>
-      <View style={styles.filterContainer}>
-        <Picker
-          selectedValue={selectedGroup}
-          onValueChange={(itemValue) => setSelectedGroup(itemValue)}
-          style={styles.picker}
-        >
-          <Picker.Item label="Tous les groupes" value="" />
-          {groups.map((group) => (
-            <Picker.Item key={group.id} label={group.name} value={group.id} />
-          ))}
-        </Picker>
-      </View>
-
-      {error && <Text style={styles.error}>{error}</Text>}
-
-      <View style={styles.summary}>
-        <Text style={styles.summaryTitle}>Balance Globale</Text>
-        <Text
-          style={[
-            styles.summaryTotal,
-            totalBalance > 0 ? styles.positive : styles.negative,
-          ]}
-        >
-          {totalBalance.toFixed(2)}€
-        </Text>
-        {suggestions.length > 0 && (
-          <Pressable
-            style={styles.suggestionsButton}
-            onPress={() => setShowSuggestions(true)}
-          >
-            <Ionicons name="swap-horizontal" size={20} color="#fff" />
-            <Text style={styles.suggestionsButtonText}>
-              Voir les remboursements suggérés
-            </Text>
-          </Pressable>
-        )}
-      </View>
-
-      <FlatList
-        data={balances}
-        keyExtractor={(item, index) =>
-          `${item.groupId || 'no-group'}-${item.participantId}-${index}`
-        }
-        renderItem={({ item }) => (
-          <View style={styles.balanceCard}>
-            <View style={styles.balanceHeader}>
-              <Text style={styles.personName}>{item.participantName}</Text>
-              <Text
-                style={[
-                  styles.balanceAmount,
-                  item.amount > 0 ? styles.positive : styles.negative,
-                ]}
-              >
-                {item.amount > 0 ? '+' : ''}
-                {item.amount.toFixed(2)}€
-              </Text>
-            </View>
-            {!selectedGroup && (
-              <Text style={styles.groupName}>{item.groupName}</Text>
-            )}
-          </View>
-        )}
-        ListEmptyComponent={
-          !isLoading && (
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>
-                {groups.length > 0
-                  ? 'Aucun solde à afficher'
-                  : "Créez d'abord un groupe"}
-              </Text>
-            </View>
-          )
-        }
-      />
-
-      <Modal
-        isVisible={showSuggestions}
-        onSwipeComplete={handleCloseModal}
-        onBackdropPress={handleCloseModal}
-        onBackButtonPress={handleCloseModal}
-        swipeDirection={['down']}
-        style={styles.modal}
-        propagateSwipe
+    <SafeAreaView style={styles.container}>
+      <Pressable
+        style={styles.groupSelector}
+        onPress={() => setShowGroupSelector(true)}
       >
-        <View style={styles.modalContent}>
-          <View style={styles.modalIndicator} />
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Suggestions de remboursement</Text>
-            <Pressable onPress={handleCloseModal} style={styles.closeButton}>
-              <Ionicons name="close" size={24} color="#6B7280" />
-            </Pressable>
-          </View>
+        <Text style={styles.groupName}>
+          {selectedGroup?.name || 'Sélectionner un groupe'}
+        </Text>
+        <Ionicons name="chevron-down" size={24} color="#4B5563" />
+      </Pressable>
 
-          <FlatList
-            data={suggestions}
-            keyExtractor={(_, index) => index.toString()}
-            renderItem={({ item }) => (
-              <Pressable
-                style={styles.suggestionCard}
-                onPress={() => {
-                  handleCloseModal();
-                  handlePaymentConfirmation(item);
-                }}
-              >
-                <View style={styles.suggestionHeader}>
-                  <Text style={styles.suggestionText}>
-                    <Text style={styles.participantName}>{item.fromName}</Text>
-                    {' → '}
-                    <Text style={styles.participantName}>{item.toName}</Text>
-                  </Text>
-                  <Text style={styles.amount}>{item.amount.toFixed(2)}€</Text>
-                </View>
-                {!selectedGroup && (
-                  <Text style={styles.groupName}>{item.groupName}</Text>
-                )}
-              </Pressable>
-            )}
-            ListEmptyComponent={
-              <View style={styles.emptyContainer}>
-                <Text style={styles.emptyText}>
-                  Aucune suggestion de remboursement
-                </Text>
-              </View>
-            }
-          />
-        </View>
-      </Modal>
-
-      {isLoading && (
-        <ActivityIndicator style={styles.loader} size="large" color="#2563EB" />
+      {isLoading ? (
+        <ActivityIndicator size="large" color="#2563EB" />
+      ) : (
+        <ScrollView style={styles.balanceList}>
+          {participantBalances.map(renderParticipantBalance)}
+        </ScrollView>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -293,166 +166,75 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
+  groupSelector: {
+    flexDirection: 'row',
     alignItems: 'center',
-    padding: 20,
-  },
-  filterContainer: {
-    padding: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  picker: {
-    backgroundColor: '#F3F4F6',
-  },
-  summary: {
-    padding: 20,
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  summaryTitle: {
-    fontSize: 16,
-    color: '#6B7280',
-    marginBottom: 4,
-  },
-  summaryTotal: {
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  balanceCard: {
+    justifyContent: 'space-between',
     padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
+  groupName: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  balanceList: {
+    flex: 1,
+    padding: 16,
+  },
+  balanceCard: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
   balanceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  participantName: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111827',
+    marginLeft: 12,
+  },
+  balanceDetails: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 12,
+  },
+  balanceRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 8,
   },
-  personName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#111827',
+  balanceLabel: {
+    fontSize: 14,
+    color: '#4B5563',
   },
   balanceAmount: {
     fontSize: 16,
     fontWeight: '600',
+    color: '#111827',
   },
-  groupName: {
-    fontSize: 14,
-    color: '#6B7280',
-    marginTop: 4,
+  netBalanceRow: {
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    paddingTop: 8,
+    marginTop: 8,
   },
-  positive: {
+  positiveBalance: {
     color: '#059669',
   },
-  negative: {
+  negativeBalance: {
     color: '#DC2626',
-  },
-  emptyContainer: {
-    padding: 20,
-    alignItems: 'center',
-  },
-  emptyText: {
-    fontSize: 16,
-    color: '#6B7280',
-    textAlign: 'center',
-  },
-  error: {
-    color: '#DC2626',
-    padding: 16,
-    textAlign: 'center',
-  },
-  retryButton: {
-    backgroundColor: '#2563EB',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-    marginTop: 12,
-  },
-  retryButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  loader: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: [{ translateX: -12 }, { translateY: -12 }],
-  },
-  suggestionsButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#2563EB',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    marginTop: 12,
-  },
-  suggestionsButtonText: {
-    color: '#fff',
-    marginLeft: 8,
-    fontWeight: '500',
-  },
-  modal: {
-    justifyContent: 'flex-end',
-    margin: 0,
-  },
-  modalContent: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 8,
-    paddingBottom: 20,
-    maxHeight: '80%',
-  },
-  modalIndicator: {
-    width: 40,
-    height: 4,
-    backgroundColor: '#94A3B8',
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginBottom: 8,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    marginBottom: 16,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  closeButton: {
-    padding: 4,
-  },
-  suggestionCard: {
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  suggestionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  suggestionText: {
-    fontSize: 14,
-    color: '#374151',
-  },
-  participantName: {
-    fontWeight: '600',
-    color: '#111827',
-  },
-  amount: {
-    color: '#2563EB',
-    fontWeight: '600',
   },
 });

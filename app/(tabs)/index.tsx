@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   TextInput,
   Modal,
   RefreshControl,
+  SafeAreaView,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,6 +18,7 @@ import { getGroups, deleteGroup } from '../../services/groups';
 import { getPendingInvitations } from '../../services/invitations';
 import { useAuth } from '../../lib/auth-context';
 import type { Group } from '../../types/group';
+import { useFocusEffect } from '@react-navigation/native';
 
 export default function HomeScreen() {
   const [groups, setGroups] = useState<Group[]>([]);
@@ -42,23 +44,32 @@ export default function HomeScreen() {
     }
   }, [user, params.refresh]);
 
+  useFocusEffect(
+    useCallback(() => {
+      if (user) {
+        loadGroups();
+      }
+    }, [user])
+  );
+
+  useEffect(() => {
+    if (params.refresh) {
+      loadGroups();
+    }
+  }, [params.refresh]);
+
   const loadGroups = async () => {
     try {
-      if (!refreshing) {
-        setIsLoading(true);
-      }
+      setIsLoading(true);
       setError(null);
-
       const fetchedGroups = await getGroups();
-      console.log(`${fetchedGroups.length} groupes chargés`);
       setGroups(fetchedGroups);
       setFilteredGroups(fetchedGroups);
-    } catch (err) {
-      console.error('Erreur lors de la récupération des groupes:', err);
-      setError('Impossible de charger vos groupes');
+    } catch (error) {
+      console.error('Erreur lors du chargement des groupes:', error);
+      setError('Impossible de charger les groupes');
     } finally {
       setIsLoading(false);
-      setRefreshing(false);
     }
   };
 
@@ -109,7 +120,7 @@ export default function HomeScreen() {
           // Navigation vers l'écran d'édition
           router.push({
             pathname: '/edit-group',
-            params: { id: group.id },
+            params: { groupId: group.id },
           });
         },
       },
@@ -181,6 +192,48 @@ export default function HomeScreen() {
     });
   };
 
+  const handleEditGroup = (group: Group) => {
+    console.log('Édition du groupe:', group.id);
+    router.push({
+      pathname: '/edit-group',
+      params: { groupId: group.id },
+    });
+  };
+
+  const renderGroupItem = ({ item }: { item: Group }) => (
+    <Pressable style={styles.groupCard} onPress={() => handleGroupPress(item)}>
+      <View style={styles.groupCardHeader}>
+        <View style={styles.groupIconContainer}>
+          <Ionicons name="people" size={24} color="#2563EB" />
+        </View>
+        <Text style={styles.groupName}>{item.name}</Text>
+        <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+      </View>
+
+      <View style={styles.groupCardBody}>
+        <View style={styles.groupInfoItem}>
+          <Ionicons name="person-outline" size={16} color="#4B5563" />
+          <Text style={styles.groupInfoLabel}>Participants</Text>
+          <Text style={styles.groupInfoValue}>{item.participants.length}</Text>
+        </View>
+
+        <View style={styles.groupInfoItem}>
+          <Ionicons name="cash-outline" size={16} color="#4B5563" />
+          <Text style={styles.groupInfoLabel}>Total</Text>
+          <Text style={styles.groupInfoValue}>{item.total.toFixed(2)} €</Text>
+        </View>
+
+        <View style={styles.groupInfoItem}>
+          <Ionicons name="calendar-outline" size={16} color="#4B5563" />
+          <Text style={styles.groupInfoLabel}>Créé le</Text>
+          <Text style={styles.groupInfoValue}>
+            {new Date(item.createdAt).toLocaleDateString()}
+          </Text>
+        </View>
+      </View>
+    </Pressable>
+  );
+
   if (isLoading && !refreshing) {
     return (
       <View style={styles.centerContainer}>
@@ -201,99 +254,47 @@ export default function HomeScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Mes groupes</Text>
-        {invitationsCount > 0 && (
-          <Pressable
-            style={styles.invitationNotification}
-            onPress={() => router.push('/(tabs)/invitations')}
-          >
-            <Ionicons name="mail" size={20} color="#FFFFFF" />
-            <Text style={styles.invitationNotificationText}>
-              {invitationsCount}{' '}
-              {invitationsCount > 1 ? 'invitations' : 'invitation'}
-            </Text>
-          </Pressable>
-        )}
-      </View>
-
-      <View style={styles.searchContainer}>
-        <Ionicons name="search" size={20} color="#6B7280" />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Rechercher un groupe..."
-          value={searchQuery}
-          onChangeText={handleSearch}
-        />
-        {searchQuery ? (
-          <Pressable onPress={() => handleSearch('')}>
-            <Ionicons name="close-circle" size={20} color="#6B7280" />
-          </Pressable>
-        ) : null}
-      </View>
-
-      {isLoading && !refreshing ? (
-        <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color="#2563EB" />
-        </View>
-      ) : error ? (
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>{error}</Text>
-          <Pressable style={styles.retryButton} onPress={loadGroups}>
-            <Text style={styles.retryButtonText}>Réessayer</Text>
-          </Pressable>
-        </View>
-      ) : (
-        <FlatList
-          data={filteredGroups}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <Pressable
-              style={styles.groupCard}
-              onPress={() => handleGroupPress(item)}
-              onLongPress={() => handleLongPress(item)}
-              delayLongPress={500}
-            >
-              <View style={styles.groupInfo}>
-                <Text style={styles.groupName}>{item.name}</Text>
-                <Text style={styles.participantsCount}>
-                  {item.participants.length}{' '}
-                  {item.participants.length > 1
-                    ? 'participants'
-                    : 'participant'}
-                </Text>
-              </View>
-              <View style={styles.groupTotal}>
-                <Text style={styles.totalLabel}>Total</Text>
-                <Text style={styles.totalAmount}>
-                  {item.total ? `${item.total.toFixed(2)} €` : '0.00 €'}
-                </Text>
-              </View>
+        {/* Champ de recherche remonté */}
+        <View style={styles.searchContainer}>
+          <Ionicons name="search" size={20} color="#6B7280" />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Rechercher un groupe..."
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+          />
+          {searchQuery.length > 0 && (
+            <Pressable onPress={() => setSearchQuery('')}>
+              <Ionicons name="close-circle" size={20} color="#6B7280" />
             </Pressable>
           )}
+        </View>
+      </View>
+
+      <View style={styles.content}>
+        <FlatList
+          data={filteredGroups}
+          renderItem={renderGroupItem}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.groupsList}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+          }
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
+              <Ionicons name="people-outline" size={64} color="#9CA3AF" />
               <Text style={styles.emptyText}>
-                Vous n'avez pas encore de groupe.
-              </Text>
-              <Text style={styles.emptySubText}>
-                Créez un groupe pour commencer à partager des dépenses.
+                {searchQuery
+                  ? 'Aucun groupe ne correspond à votre recherche'
+                  : 'Vous ne participez à aucun groupe'}
               </Text>
             </View>
           }
-          contentContainerStyle={
-            filteredGroups.length === 0 ? { flex: 1 } : { paddingBottom: 80 }
-          }
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={handleRefresh}
-              colors={['#2563EB']}
-            />
-          }
         />
-      )}
+      </View>
 
       {selectedGroup && (
         <Modal
@@ -306,24 +307,74 @@ export default function HomeScreen() {
             <View style={styles.modalContent}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>{selectedGroup.name}</Text>
-                <Pressable onPress={() => setSelectedGroup(null)}>
+                <Pressable
+                  onPress={() => setSelectedGroup(null)}
+                  style={styles.closeIconButton}
+                >
                   <Ionicons name="close" size={24} color="#6B7280" />
                 </Pressable>
               </View>
 
               <View style={styles.modalSection}>
-                <Text style={styles.modalSectionTitle}>Participants</Text>
-                {selectedGroup.participants.map((participant) => (
-                  <View key={participant.id} style={styles.participantRow}>
-                    <Text style={styles.participantName}>
-                      {participant.name}
-                    </Text>
+                <View style={styles.sectionHeaderRow}>
+                  <Ionicons name="people" size={20} color="#2563EB" />
+                  <Text style={styles.modalSectionTitle}>Éditeurs</Text>
+                </View>
+                {selectedGroup.editors.map((editor) => (
+                  <View key={editor.id} style={styles.participantRow}>
+                    <Ionicons
+                      name="person"
+                      size={18}
+                      color="#4B5563"
+                      style={styles.participantIcon}
+                    />
+                    <Text style={styles.participantName}>{editor.name}</Text>
+                    {editor.id === selectedGroup.createdBy ? (
+                      <View style={styles.creatorBadge}>
+                        <Text style={styles.creatorBadgeText}>Créateur</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.editorBadge}>
+                        <Text style={styles.editorBadgeText}>Éditeur</Text>
+                      </View>
+                    )}
                   </View>
                 ))}
               </View>
 
               <View style={styles.modalSection}>
-                <Text style={styles.modalSectionTitle}>Total des dépenses</Text>
+                <View style={styles.sectionHeaderRow}>
+                  <Ionicons name="list" size={20} color="#2563EB" />
+                  <Text style={styles.modalSectionTitle}>Participants</Text>
+                </View>
+                {selectedGroup.participants.map((participant, index) => (
+                  <View
+                    key={`participant-${index}-${participant.name}`}
+                    style={styles.participantRow}
+                  >
+                    <Ionicons
+                      name="person-outline"
+                      size={18}
+                      color="#4B5563"
+                      style={styles.participantIcon}
+                    />
+                    <Text style={styles.participantName}>
+                      {participant.name}
+                    </Text>
+                    {participant.isVirtual && (
+                      <Text style={styles.virtualLabel}>(Fictif)</Text>
+                    )}
+                  </View>
+                ))}
+              </View>
+
+              <View style={styles.modalSection}>
+                <View style={styles.sectionHeaderRow}>
+                  <Ionicons name="cash-outline" size={20} color="#2563EB" />
+                  <Text style={styles.modalSectionTitle}>
+                    Total des dépenses
+                  </Text>
+                </View>
                 <Text style={styles.modalTotal}>
                   {selectedGroup.total.toFixed(2)} €
                 </Text>
@@ -331,15 +382,14 @@ export default function HomeScreen() {
 
               <View style={styles.modalActions}>
                 <Pressable
-                  style={styles.closeModalButton}
-                  onPress={() => setSelectedGroup(null)}
+                  style={styles.editButton}
+                  onPress={() => {
+                    setSelectedGroup(null);
+                    handleEditGroup(selectedGroup);
+                  }}
                 >
-                  <Ionicons
-                    name="close-circle-outline"
-                    size={20}
-                    color="#FFFFFF"
-                  />
-                  <Text style={styles.actionButtonText}>Fermer</Text>
+                  <Ionicons name="create-outline" size={20} color="#fff" />
+                  <Text style={styles.buttonText}>Modifier le groupe</Text>
                 </Pressable>
               </View>
             </View>
@@ -357,14 +407,42 @@ export default function HomeScreen() {
           <Text style={styles.newButtonText}>Nouveau groupe</Text>
         </Pressable>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#F9FAFB',
+  },
+  header: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  pageTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 12,
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: '#111827',
+    marginLeft: 8,
   },
   centerContainer: {
     flex: 1,
@@ -409,51 +487,63 @@ const styles = StyleSheet.create({
     shadowRadius: 3.84,
     elevation: 5,
   },
+  createButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
   groupCard: {
-    backgroundColor: '#fff',
-    marginHorizontal: 16,
-    marginVertical: 8,
-    padding: 16,
+    backgroundColor: '#FFFFFF',
     borderRadius: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    marginBottom: 16,
     shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 1,
-    },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    shadowRadius: 4,
+    elevation: 3,
+    overflow: 'hidden',
   },
-  groupCardPressed: {
-    opacity: 0.7,
+  groupCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
   },
-  groupInfo: {
-    flex: 1,
+  groupIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#EBF5FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
   },
   groupName: {
-    fontSize: 16,
+    flex: 1,
+    fontSize: 18,
     fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 4,
+    color: '#111827',
   },
-  groupMembers: {
+  groupCardBody: {
+    padding: 16,
+  },
+  groupInfoItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  groupInfoLabel: {
     fontSize: 14,
     color: '#6B7280',
+    marginLeft: 8,
+    flex: 1,
   },
-  groupTotal: {
-    alignItems: 'flex-end',
-  },
-  totalAmount: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#2563EB',
-  },
-  totalLabel: {
-    fontSize: 12,
-    color: '#6B7280',
+  groupInfoValue: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#111827',
   },
   emptyContainer: {
     padding: 32,
@@ -470,49 +560,18 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     textAlign: 'center',
   },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    marginHorizontal: 16,
-    marginVertical: 16,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 1,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 1,
-    elevation: 1,
-  },
-  searchIcon: {
-    marginRight: 8,
-  },
-  searchInput: {
-    flex: 1,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: '#1F2937',
-  },
-  clearButton: {
-    padding: 4,
-  },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    padding: 16,
   },
   modalContent: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
     width: '100%',
-    maxWidth: 400,
+    maxHeight: '80%',
     padding: 20,
     shadowColor: '#000',
     shadowOffset: {
@@ -527,107 +586,103 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
   },
   modalTitle: {
     fontSize: 20,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#1F2937',
+    flex: 1,
+  },
+  closeIconButton: {
+    padding: 4,
   },
   modalSection: {
     marginBottom: 20,
   },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
   modalSectionTitle: {
     fontSize: 16,
-    fontWeight: '500',
-    color: '#6B7280',
-    marginBottom: 8,
-  },
-  participantRow: {
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  participantName: {
-    fontSize: 16,
-    color: '#1F2937',
-  },
-  modalTotal: {
-    fontSize: 18,
     fontWeight: '600',
     color: '#2563EB',
+    marginLeft: 8,
+  },
+  participantRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  participantIcon: {
+    marginRight: 8,
+  },
+  participantName: {
+    fontSize: 15,
+    color: '#1F2937',
+    flex: 1,
+  },
+  modalTotal: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#2563EB',
+    textAlign: 'center',
+    marginTop: 8,
   },
   modalActions: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    marginTop: 10,
+    marginTop: 16,
   },
-  actionButton: {
+  editButton: {
     backgroundColor: '#2563EB',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 10,
+    paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: 8,
   },
-  actionButtonText: {
-    color: '#fff',
+  creatorBadge: {
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 4,
+  },
+  creatorBadgeText: {
+    fontSize: 12,
+    color: '#D97706',
+    fontWeight: '500',
+  },
+  editorBadge: {
+    backgroundColor: '#E0F2FE',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 4,
+  },
+  editorBadgeText: {
+    fontSize: 12,
+    color: '#0284C7',
+    fontWeight: '500',
+  },
+  virtualLabel: {
+    fontSize: 12,
+    color: '#6B7280',
     marginLeft: 8,
-    fontWeight: '500',
   },
-  testButton: {
-    backgroundColor: '#F59E0B',
-    marginHorizontal: 16,
-    marginBottom: 8,
-    padding: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  testButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#1F2937',
-  },
-  addButton: {
-    backgroundColor: '#2563EB',
-    padding: 10,
-    borderRadius: 8,
-    marginLeft: 'auto',
-  },
-  addButtonText: {
+  buttonText: {
     color: '#fff',
     fontSize: 16,
-    fontWeight: '500',
+    fontWeight: '600',
+    marginLeft: 8,
   },
-  loadingContainer: {
+  content: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    color: '#6B7280',
-    fontSize: 16,
-    marginTop: 16,
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 16,
-  },
-  participantsCount: {
-    fontSize: 14,
-    color: '#6B7280',
   },
   newButtonContainer: {
     position: 'absolute',
@@ -670,20 +725,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 6,
   },
-  editButton: {
-    backgroundColor: '#F59E0B',
-  },
-  deleteButton: {
-    backgroundColor: '#DC2626',
-  },
-  closeModalButton: {
-    backgroundColor: '#6B7280',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
+  groupsList: {
     paddingHorizontal: 16,
-    borderRadius: 8,
-    flex: 1,
   },
 });

@@ -34,21 +34,27 @@ export interface Invitation {
 }
 
 // Rechercher un utilisateur par email
-export async function searchUserByEmail(email: string): Promise<User | null> {
+export async function searchUserByEmail(email: string) {
   try {
-    const usersCollection = collection(db, 'users');
-    const q = query(usersCollection, where('email', '==', email));
+    console.log(`Recherche de l'utilisateur avec l'email: ${email}`);
+
+    const usersRef = collection(db, 'users');
+    const q = query(usersRef, where('email', '==', email.toLowerCase().trim()));
     const querySnapshot = await getDocs(q);
 
     if (querySnapshot.empty) {
+      console.log('Aucun utilisateur trouvé avec cet email');
       return null;
     }
 
     const userDoc = querySnapshot.docs[0];
+    const userData = userDoc.data();
+
     return {
       id: userDoc.id,
-      ...userDoc.data(),
-    } as User;
+      name: userData.name || '',
+      email: userData.email || '',
+    };
   } catch (error) {
     console.error("Erreur lors de la recherche de l'utilisateur:", error);
     throw error;
